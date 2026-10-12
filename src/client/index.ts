@@ -219,6 +219,31 @@ white-space:pre-wrap;word-break:break-word}
 .dsw-models .id{color:var(--fg3);font-size:12px;margin-top:2px;word-break:break-word}
 /* 说明文字：限宽 64ch —— 满宽的一行小字读起来很累，且会拖长整张卡。 */
 .dsw-hint{color:var(--fg3);font-size:12px;line-height:1.7;margin:var(--sp-3) 0 0;max-width:64ch}
+
+/* ── 设置项 + 卡片盒（0.8.0）：对齐 Our Free Model 的设置页 ────────────────
+   改造前是横排的「label · 控件 · value」：一行里三样东西抢宽度，
+   一句说明塞不下，只能全堆到卡片尾的 dsw-hint，读的人得来回扫。
+   参考页（表单型设置页）的做法是**一项占一行**：左边标题带一句副说明、右边控件，
+   项与项之间一条细线。好处是**每一项自解释**，不必回页尾找补充说明。
+   ⚠️ 两种布局各有适用面：数据型内容（账号行、统计）仍走原来的 dsw-kv /
+   dsw-gate-row，它们信息密度高、没有"每个字段配一句说明"的必要。 */
+.dsw-field{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:var(--sp-2) var(--sp-4);
+  align-items:center;padding:var(--sp-3) 0;border-top:1px solid var(--bd)}
+.dsw-field:first-child{border-top:0;padding-top:2px}
+.dsw-field-main{min-width:0}
+.dsw-field-title{font-size:13px;font-weight:500;line-height:1.5;color:var(--fg)}
+.dsw-field-desc{font-size:11.5px;line-height:1.6;color:var(--fg3);margin-top:2px}
+.dsw-field-ctrl{display:flex;align-items:center;gap:var(--sp-2);justify-self:end}
+/* 控件需要占满整行时（滑块 + 数值）用这个变体：文字在上、控件在下。 */
+.dsw-field.wide{grid-template-columns:minmax(0,1fr)}
+.dsw-field.wide .dsw-field-ctrl{justify-self:stretch;margin-top:var(--sp-1)}
+/* 卡片盒：**只有设置型内容**用它。数据型分组继续走"分区标题 + 负空间"
+   （另见 dsw-card 的说明：盒子本身不表达层级，连堆七张就是 AI 默认长相）。 */
+.dsw-card.boxed{background:var(--bg2);border:1px solid var(--bd);border-radius:var(--r-lg);
+  padding:var(--sp-2) var(--sp-4) var(--sp-3);margin:0 0 var(--sp-4)}
+.dsw-card.boxed > .dsw-cardhead{margin:var(--sp-3) 0 0;padding-bottom:var(--sp-1)}
+/* 卡片头的副说明：与 dsw-field-desc 同色同级，让"组说明"和"项说明"读起来是一套。 */
+.dsw-carddesc{font-size:11.5px;line-height:1.6;color:var(--fg3);margin:2px 0 0;max-width:64ch}
 .dsw-gate-row{display:flex;align-items:center;gap:10px;margin:var(--sp-3) 0;flex-wrap:wrap}
 .dsw-gate-label{color:var(--fg2);font-size:12px;min-width:52px;flex:0 0 auto}
 .dsw-gate-value{font-size:12px;color:var(--fg);min-width:56px;text-align:right;font-variant-numeric:tabular-nums}
@@ -535,7 +560,7 @@ function Panel(): any {
     selectAcctTab('status')
 
     // ── 登录卡 ──
-    const loginCard = el('div', 'dsw-card')
+    const loginCard = el('div', 'dsw-card boxed')
     const loginHead = el('div', 'dsw-cardhead')
     const loginTitle = el('div')
     loginTitle.append(el('span', 'name', '登录状态'))
@@ -543,6 +568,7 @@ function Panel(): any {
     loginTitle.append(badge)
     loginHead.append(loginTitle)
     loginCard.append(loginHead)
+    loginCard.append(el('p', 'dsw-carddesc', '凭证来自哪里、什么时候抓的、还剩多少寿命。'))
 
     const statusKv = el('div', 'dsw-kv')
     loginCard.append(statusKv)
@@ -572,8 +598,9 @@ function Panel(): any {
     // ── 账号卡（退出 / 换号）──
     // 为什么要单独一张卡：退出登录以前只作为一个按钮塞在「手动粘贴 Token」那张卡的角落里，
     // 用户根本找不到（实测反馈）。退出账号是高频操作，必须显眼、且要能换号。
-    const accountCard = el('div', 'dsw-card')
+    const accountCard = el('div', 'dsw-card boxed')
     accountCard.append(el('div', 'dsw-cardhead', '当前账号'))
+    accountCard.append(el('p', 'dsw-carddesc', '这个账号的登录态，以及退出入口。'))
     const accountLine = el('div', 'dsw-kv')
     accountCard.append(accountLine)
     const accountActions = el('div', 'dsw-row')
@@ -655,12 +682,13 @@ function Panel(): any {
       }
     }
 
-    const accountsCard = el('div', 'dsw-card')
+    const accountsCard = el('div', 'dsw-card boxed')
     const accountsHead = el('div', 'dsw-cardhead')
     accountsHead.append(el('span', 'name', '账号库'))
     const accountsBadge = el('span', 'dsw-badge off', '—')
     accountsHead.append(accountsBadge)
     accountsCard.append(accountsHead)
+    accountsCard.append(el('p', 'dsw-carddesc', '已保存的账号；切换、归组、按备注管理都在这儿。'))
     accountsCard.append(
       el(
         'p',
@@ -1393,8 +1421,9 @@ function Panel(): any {
     })
 
     // ── 手动 token 卡 ──
-    const tokenCard = el('div', 'dsw-card')
+    const tokenCard = el('div', 'dsw-card boxed')
     tokenCard.append(el('div', 'dsw-cardhead', '手动粘贴 Token（可选路径）'))
+    tokenCard.append(el('p', 'dsw-carddesc', '外部浏览器的登录态抓不到时，用这条手动补。'))
     tokenCard.append(
       el(
         'p',
@@ -1422,8 +1451,9 @@ function Panel(): any {
     acctLibraryPane.append(tokenCard)
 
     // ── 测试卡 ──
-    const testCard = el('div', 'dsw-card')
+    const testCard = el('div', 'dsw-card boxed')
     testCard.append(el('div', 'dsw-cardhead', '连通性测试'))
+    testCard.append(el('p', 'dsw-carddesc', '验证整条链路能不能通，不消耗额度。'))
     testCard.append(el('p', 'dsw-hint', '直接经适配器发一次最小请求（会消耗一点网页端额度）：'))
     const testActions = el('div', 'dsw-row')
     testActions.style.marginTop = '6px'
@@ -1437,8 +1467,9 @@ function Panel(): any {
     testCard.append(testOut)
 
     // ── 模型卡 ──
-    const modelsCard = el('div', 'dsw-card')
+    const modelsCard = el('div', 'dsw-card boxed')
     modelsCard.append(el('div', 'dsw-cardhead', '可用模型（网页免费）'))
+    modelsCard.append(el('p', 'dsw-carddesc', '网页端当前可用的模型；模型选择器里也能切。'))
     const modelsList = el('ul', 'dsw-models')
     modelsCard.append(modelsList)
     const modelsHint = el('p', 'dsw-hint', '')
@@ -1708,8 +1739,9 @@ function Panel(): any {
     // ── 请求节流卡：并发开关 + 间隔区间 + 会话清理 ──
     // 这三项直接决定会不会被账号级限流（实测双窗口并发 6 分钟内被限制 1 天），
     // 所以不该只藏在配置文件里 —— 界面上直接可调，改完即时生效并落盘。
-    const gateCard = el('div', 'dsw-card')
+    const gateCard = el('div', 'dsw-card boxed')
     gateCard.append(el('div', 'dsw-cardhead', '请求节流（防风控）'))
+    gateCard.append(el('p', 'dsw-carddesc', '决定会不会被账号级限流。改完即时生效并落盘，不用重启。'))
 
     const rangeInput = (): HTMLInputElement => {
       const input = el('input', 'dsw-range') as HTMLInputElement
@@ -1720,50 +1752,78 @@ function Panel(): any {
       return input
     }
 
-    const concRow = el('div', 'dsw-gate-row')
+    // 0.8.0：改成"标题 + 副说明 / 右侧开关"（原来是横排一行，说明只能堆到卡片尾）
+    const concRow = el('div', 'dsw-field')
+    const concMain = el('div', 'dsw-field-main')
+    concMain.append(
+      el('div', 'dsw-field-title', '允许并发'),
+      el('div', 'dsw-field-desc', '同一账号同时发两条请求。实测双窗口并发 6 分钟内被限流 1 天，不建议开。'),
+    )
     const concLabel = el('label', 'dsw-switch')
     const concInput = el('input') as HTMLInputElement
     concInput.type = 'checkbox'
+    // ⚠️ 说明文字移到 `.dsw-field-desc` 之后，这里必须补 aria-label —— 否则开关失去可访问名。
+    concInput.setAttribute('aria-label', '允许并发')
     const concTrack = el('span', 'dsw-switch-track')
-    concLabel.append(concInput, concTrack, el('span', undefined, '允许并发（同一账号同时发两条）'))
-    concRow.append(concLabel)
+    concLabel.append(concInput, concTrack)
+    const concCtrl = el('div', 'dsw-field-ctrl')
+    concCtrl.append(concLabel)
+    concRow.append(concMain, concCtrl)
     gateCard.append(concRow)
 
-    const minRow = el('div', 'dsw-gate-row')
-    minRow.append(el('span', 'dsw-gate-label', '间隔下限'))
+    const minRow = el('div', 'dsw-field wide')
+    const minMain = el('div', 'dsw-field-main')
+    minMain.append(el('div', 'dsw-field-title', '间隔下限'), el('div', 'dsw-field-desc', '两次请求之间的最短等待。'))
     const minRange = rangeInput()
+    minRange.setAttribute('aria-label', '间隔下限')
     const minValue = el('span', 'dsw-gate-value', '—')
-    minRow.append(minRange, minValue)
+    const minCtrl = el('div', 'dsw-field-ctrl')
+    minCtrl.append(minRange, minValue)
+    minRow.append(minMain, minCtrl)
     gateCard.append(minRow)
 
-    const maxRow = el('div', 'dsw-gate-row')
-    maxRow.append(el('span', 'dsw-gate-label', '间隔上限'))
+    const maxRow = el('div', 'dsw-field wide')
+    const maxMain = el('div', 'dsw-field-main')
+    maxMain.append(el('div', 'dsw-field-title', '间隔上限'), el('div', 'dsw-field-desc', '两次请求之间的最长等待（随机取值）'))
     const maxRange = rangeInput()
+    maxRange.setAttribute('aria-label', '间隔上限')
     const maxValue = el('span', 'dsw-gate-value', '—')
-    maxRow.append(maxRange, maxValue)
+    const maxCtrl = el('div', 'dsw-field-ctrl')
+    maxCtrl.append(maxRange, maxValue)
+    maxRow.append(maxMain, maxCtrl)
     gateCard.append(maxRow)
 
     const intervalHint = el('p', 'dsw-hint', '')
     gateCard.append(intervalHint)
 
-    const presetRow = el('div', 'dsw-gate-row')
+    const presetRow = el('div', 'dsw-field wide')
+    const presetMain = el('div', 'dsw-field-main')
+    presetMain.append(el('div', 'dsw-field-title', '快捷预设'))
+    // ⚠️ 预设按钮**每次状态刷新都会重建**（见下方 `presetCtrl.textContent = ''`）
+    //   ⇒ 清空只能清 ctrl 那一格，否则会把 main 里的标题一起清掉。
+    const presetCtrl = el('div', 'dsw-field-ctrl')
+    presetRow.append(presetMain, presetCtrl)
     gateCard.append(presetRow)
 
     // ── prompt 上限（token 体量的总阀门）──────────────────────────
     // 为什么它比"间隔"更值得调：网页 API 无状态 → **每一轮都要把整段转写重发**，
     // 转写越长、单次请求越贵。实测同一个会话里单次输入估算从 9.7k token 涨到 293k
     // （180 轮累计约 2900 万），随后账号被限流。间隔只影响"多久发一次"，这个才影响"每次发多少"。
-    const promptRow = el('div', 'dsw-gate-row')
-    promptRow.append(el('span', 'dsw-gate-label', 'prompt 上限'))
+    const promptRow = el('div', 'dsw-field wide')
+    const promptMain = el('div', 'dsw-field-main')
+    promptMain.append(el('div', 'dsw-field-title', 'prompt 上限'))
+    // 说明从"卡片尾的 p.dsw-hint"挪到标题正下方 —— 每项自解释，不必回卡片尾找。
+    const promptHint = el('div', 'dsw-field-desc', '')
+    promptMain.append(promptHint)
     const promptRange = el('input', 'dsw-range') as HTMLInputElement
     promptRange.type = 'range'
     promptRange.setAttribute('aria-label', 'prompt 字符上限')
     promptRange.title = '每次请求最多发送多少字符（含工具目录与全部历史）'
     const promptValue = el('span', 'dsw-gate-value', '—')
-    promptRow.append(promptRange, promptValue)
+    const promptCtrl = el('div', 'dsw-field-ctrl')
+    promptCtrl.append(promptRange, promptValue)
+    promptRow.append(promptMain, promptCtrl)
     gateCard.append(promptRow)
-    const promptHint = el('p', 'dsw-hint', '')
-    gateCard.append(promptHint)
 
     /** 字符数 → 「万字符」。界面上出现一长串 0 没人看得出差别。 */
     const fmtChars = (n: number): string => `${Number.isFinite(n) ? (n / 10_000).toFixed(n % 10_000 === 0 ? 0 : 1) : '—'} 万字符`
@@ -1798,17 +1858,20 @@ function Panel(): any {
     // 有数量上限 —— 群友实测 40 张通过 / 52 张被拒。超了会以 biz_code 10 拒收**整轮**，
     // 而图还留在历史里 ⇒ **该会话此后每一轮都失败**，用户只能丢掉全部上下文。
     // 所以按时间只带最近的 N 张，更早的略过。
-    const imgRow = el('div', 'dsw-gate-row')
-    imgRow.append(el('span', 'dsw-gate-label', '图片上限'))
+    const imgRow = el('div', 'dsw-field wide')
+    const imgMain = el('div', 'dsw-field-main')
+    imgMain.append(el('div', 'dsw-field-title', '图片上限'))
+    const imgHint = el('div', 'dsw-field-desc', '')
+    imgMain.append(imgHint)
     const imgRange = el('input', 'dsw-range') as HTMLInputElement
     imgRange.type = 'range'
     imgRange.setAttribute('aria-label', '单次请求的图片数量上限')
     imgRange.title = '一次请求最多带多少张历史图片（0 = 不限制）'
     const imgValue = el('span', 'dsw-gate-value', '—')
-    imgRow.append(imgRange, imgValue)
+    const imgCtrl = el('div', 'dsw-field-ctrl')
+    imgCtrl.append(imgRange, imgValue)
+    imgRow.append(imgMain, imgCtrl)
     gateCard.append(imgRow)
-    const imgHint = el('p', 'dsw-hint', '')
-    gateCard.append(imgHint)
 
     const paintImageCap = (): void => {
       const count = Number(imgRange.value)
@@ -1832,8 +1895,11 @@ function Panel(): any {
     //
     // 用**档位滑块**而不是连续值：32K→1M 是 32 倍跨度，线性拖动时前四分之三的行程都挤在
     // 低档位，手感很差。每一格翻倍则正好符合直觉（档位由后端 CONTEXT_WINDOW_OPTIONS 给）。
-    const ctxRow = el('div', 'dsw-gate-row')
-    ctxRow.append(el('span', 'dsw-gate-label', '上下文'))
+    const ctxRow = el('div', 'dsw-field wide')
+    const ctxMain = el('div', 'dsw-field-main')
+    ctxMain.append(el('div', 'dsw-field-title', '上下文窗口'))
+    const ctxHint = el('div', 'dsw-field-desc', '')
+    ctxMain.append(ctxHint)
     const ctxRange = el('input', 'dsw-range') as HTMLInputElement
     ctxRange.type = 'range'
     ctxRange.min = '0'
@@ -1841,10 +1907,10 @@ function Panel(): any {
     ctxRange.setAttribute('aria-label', '对外声明的上下文窗口大小')
     ctxRange.title = '告诉 DSH 这个模型能装多少上下文；调小会让它更早压缩历史'
     const ctxValue = el('span', 'dsw-gate-value', '—')
-    ctxRow.append(ctxRange, ctxValue)
+    const ctxCtrl = el('div', 'dsw-field-ctrl')
+    ctxCtrl.append(ctxRange, ctxValue)
+    ctxRow.append(ctxMain, ctxCtrl)
     gateCard.append(ctxRow)
-    const ctxHint = el('p', 'dsw-hint', '')
-    gateCard.append(ctxHint)
 
     // 档位表：接口给了就用接口的，没给（老宿主）回落到内置这份 —— 界面不该因为少一个字段就没得选。
     let ctxOptions: number[] = [32_768, 65_536, 131_072, 262_144, 524_288, 1_048_576]
@@ -1892,8 +1958,11 @@ function Panel(): any {
     //   均衡轮换 ⇒ 每个账号分到的请求都变少，是把密度摊薄；
     //   遇限流就换 ⇒ 同一个出口 IP 上多号交替活跃，更像"有组织的规避"。
     // 所以这里**只看时间**（受限/失效的号会被跳过，但不会因为它受限就提前切）。
-    const swRow = el('div', 'dsw-gate-row')
-    swRow.append(el('span', 'dsw-gate-label', '自动换号'))
+    const swRow = el('div', 'dsw-field wide')
+    const swMain = el('div', 'dsw-field-main')
+    swMain.append(el('div', 'dsw-field-title', '自动换号'))
+    const swHint = el('div', 'dsw-field-desc', '')
+    swMain.append(swHint)
     const swRange = el('input', 'dsw-range') as HTMLInputElement
     swRange.type = 'range'
     swRange.min = '0'
@@ -1903,10 +1972,10 @@ function Panel(): any {
     swRange.title = '每隔这么久换到账号库里的下一个可用账号；0 = 关闭'
     // 借用成对滑块的宽度（能装下「120 分钟」），不新增样式
     const swValue = el('span', 'dsw-gate-pair-value', '—')
-    swRow.append(swRange, swValue)
+    const swCtrl = el('div', 'dsw-field-ctrl')
+    swCtrl.append(swRange, swValue)
+    swRow.append(swMain, swCtrl)
     gateCard.append(swRow)
-    const swHint = el('p', 'dsw-hint', '')
-    gateCard.append(swHint)
 
     const currentSwitchMinutes = (): number => Math.max(0, Math.round(Number(swRange.value) || 0))
 
@@ -1952,16 +2021,22 @@ function Panel(): any {
     //   · 这个开关   ＝ 模型一轮里发**几个工具调用**。工具在 DSH 侧执行（读文件、跑命令），
     //                   **不产生任何 DeepSeek 请求** ⇒ 对网页端完全不可见。
     // 所以它跟风控的关系只在"请求数"上：关掉 ⇒ 每个工具各占一轮 ⇒ 总请求数变多、任务更慢。
-    const serialRow = el('div', 'dsw-gate-row')
+    const serialRow = el('div', 'dsw-field')
+    const serialMain = el('div', 'dsw-field-main')
+    serialMain.append(el('div', 'dsw-field-title', '允许并行调用工具'))
+    const serialHint = el('div', 'dsw-field-desc', '')
+    serialMain.append(serialHint)
     const serialLabel = el('label', 'dsw-switch')
     const serialInput = el('input') as HTMLInputElement
     serialInput.type = 'checkbox'
+    // ⚠️ 说明文字移到 field 的说明位之后，开关必须自带可访问名
+    serialInput.setAttribute('aria-label', '允许并行调用工具')
     const serialTrack = el('span', 'dsw-switch-track')
-    serialLabel.append(serialInput, serialTrack, el('span', undefined, '允许并行调用工具'))
-    serialRow.append(serialLabel)
+    serialLabel.append(serialInput, serialTrack)
+    const serialCtrl = el('div', 'dsw-field-ctrl')
+    serialCtrl.append(serialLabel)
+    serialRow.append(serialMain, serialCtrl)
     gateCard.append(serialRow)
-    const serialHint = el('p', 'dsw-hint', '')
-    gateCard.append(serialHint)
 
     // 注意这里是**双否定**：勾上 = 允许并行 = 传到后端的 serialToolCalls 为 false。
     // 变量名取 checked 的语义（batched），别让读代码的人自己反推。
@@ -1981,9 +2056,15 @@ function Panel(): any {
       void saveGate({ serialToolCalls: !serialInput.checked })
     })
 
-    const cleanupRow = el('div', 'dsw-gate-row')
-    cleanupRow.append(el('span', 'dsw-gate-label', '会话清理'))
+    const cleanupRow = el('div', 'dsw-field wide')
+    const cleanupMain = el('div', 'dsw-field-main')
+    // 速览：三种模式各自的代价原来只写在按钮上，"延迟（推荐）"推荐在哪儿没处看 —— 补一句。
+    cleanupMain.append(
+      el('div', 'dsw-field-title', '会话清理'),
+      el('div', 'dsw-field-desc', '用完的网页端会话什么时候删。「立即」删得干净但链会断（下轮全量重发）；「延迟」攒够一批再删，最稳。'),
+    )
     const cleanupBtns: Record<string, HTMLButtonElement> = {}
+    const cleanupCtrl = el('div', 'dsw-field-ctrl')
     for (const pair of [
       ['immediate', '立即'],
       ['deferred', '延迟（推荐）'],
@@ -1993,13 +2074,15 @@ function Panel(): any {
       const btn = el('button', 'dsw-btn ghost dsw-preset', pair[1]) as HTMLButtonElement
       btn.addEventListener('click', () => void saveGate({ sessionCleanup: key }))
       cleanupBtns[key] = btn
-      cleanupRow.append(btn)
+      cleanupCtrl.append(btn)
     }
+    cleanupRow.append(cleanupMain, cleanupCtrl)
     gateCard.append(cleanupRow)
     // 手动清理（0.6.11）：链式投喂下自动清理是关的（会话就是链的载体，自动删等于替你清上下文），
     // 所以必须给一个"现在就把网页端弄干净"的动作。
-    const cleanupNowRow = el('div', 'dsw-gate-row')
-    cleanupNowRow.append(el('span', 'dsw-gate-label', '立即清理'))
+    const cleanupNowRow = el('div', 'dsw-field wide')
+    const cleanupNowMain = el('div', 'dsw-field-main')
+    cleanupNowMain.append(el('div', 'dsw-field-title', '现在清理'))
     const cleanupNowBtn = el('button', 'dsw-btn ghost', '清掉当前网页端会话') as HTMLButtonElement
     const cleanupNowHint = el('span', 'dsw-hint', '')
     cleanupNowBtn.addEventListener('click', () => {
@@ -2019,26 +2102,31 @@ function Panel(): any {
           cleanupNowBtn.disabled = false
         })
     })
-    cleanupNowRow.append(cleanupNowBtn, cleanupNowHint)
+    const cleanupNowCtrl = el('div', 'dsw-field-ctrl')
+    cleanupNowCtrl.append(cleanupNowBtn, cleanupNowHint)
+    cleanupNowRow.append(cleanupNowMain, cleanupNowCtrl)
     gateCard.append(cleanupNowRow)
 
     // 到期前自动重登（0.6.14）：**默认关闭**。打开后每 10 分钟检查一次，凭证失效或
     // 捕获超过 100 分钟（实测寿命 1.5~6 小时）就静默跑一次无头浏览器把凭证换新。
-    const autoReloginRow = el('div', 'dsw-gate-row')
+    const autoReloginRow = el('div', 'dsw-field')
+    const autoReloginMain = el('div', 'dsw-field-main')
+    // 原来这条说明是"行末括号 + 卡片尾的 p.dsw-hint"两处，现在合成标题下的一句。
+    autoReloginMain.append(
+      el('div', 'dsw-field-title', '到期前自动重登'),
+      el('div', 'dsw-field-desc', '后台每约 2 小时静默跑一次无头浏览器换新凭证；关掉就用上面的「一键重登」手动刷。'),
+    )
     const autoReloginLabel = el('label', 'dsw-switch')
     const autoReloginInput = el('input') as HTMLInputElement
     autoReloginInput.type = 'checkbox'
+    autoReloginInput.setAttribute('aria-label', '到期前自动重登')
     const autoReloginTrack = el('span', 'dsw-switch-track')
-    autoReloginLabel.append(
-      autoReloginInput,
-      autoReloginTrack,
-      el('span', undefined, '到期前自动重登（后台每约 2 小时静默跑一次无头浏览器）'),
-    )
+    autoReloginLabel.append(autoReloginInput, autoReloginTrack)
     autoReloginInput.addEventListener('change', () => void saveGate({ autoRelogin: autoReloginInput.checked }))
-    autoReloginRow.append(autoReloginLabel)
+    const autoReloginCtrl = el('div', 'dsw-field-ctrl')
+    autoReloginCtrl.append(autoReloginLabel)
+    autoReloginRow.append(autoReloginMain, autoReloginCtrl)
     gateCard.append(autoReloginRow)
-    const autoReloginHint = el('p', 'dsw-hint', '缓存凭证实测寿命约 2 小时；关掉它就用上面的「一键重登」手动刷。')
-    gateCard.append(autoReloginHint)
     const cleanupHint = el('p', 'dsw-hint', '')
     gateCard.append(cleanupHint)
 
@@ -2058,8 +2146,9 @@ function Panel(): any {
       format: (lo: number, hi: number) => string,
       commit: (lo: number, hi: number) => void,
     ): { row: HTMLElement; set: (lo: number, hi: number) => void } => {
-      const row = el('div', 'dsw-gate-row')
-      row.append(el('span', 'dsw-gate-label', label))
+      const row = el('div', 'dsw-field wide')
+      const main = el('div', 'dsw-field-main')
+      main.append(el('div', 'dsw-field-title', label))
       const lo = el('input', 'dsw-range') as HTMLInputElement
       const hi = el('input', 'dsw-range') as HTMLInputElement
       for (const [input, which] of [[lo, '下限'], [hi, '上限']] as const) {
@@ -2091,7 +2180,9 @@ function Panel(): any {
       hi.addEventListener('change', onCommit)
       const pair = el('div', 'dsw-range-pair')
       pair.append(lo, hi)
-      row.append(pair, value)
+      const ctrl = el('div', 'dsw-field-ctrl')
+      ctrl.append(pair, value)
+      row.append(main, ctrl)
       return {
         row,
         set: (lo2, hi2) => {
@@ -2156,7 +2247,7 @@ function Panel(): any {
     // ── 调用台账：请求密度 + 失败分类 ──────────────────────────────
     // 节流"到底有没有生效"不能靠感觉 —— 看两个数：相邻对话的间隔分布（最短间隔说明有没有连环请求）、
     // 以及失败分类（限流 / 账号被限制 / 鉴权 / 网络各占多少）。
-    const ledgerCard = el('div', 'dsw-card')
+    const ledgerCard = el('div', 'dsw-card boxed')
     const ledgerHead = el('div', 'dsw-cardhead')
     ledgerHead.append(el('span', 'name', '调用台账'))
     const ledgerBadge = el('span', 'dsw-badge off', '近 24 小时')
@@ -2323,7 +2414,7 @@ function Panel(): any {
     tokenStats.append(sTotal.node, sIn.node, sOut.node, sCalls.node)
     tokenPane.append(tokenStats)
 
-    const trendCard = el('div', 'dsw-card')
+    const trendCard = el('div', 'dsw-card boxed')
     const tokenHead = el('div', 'dsw-cardhead')
     tokenHead.append(el('span', 'name', '按天用量'))
     const tokenBadge = el('span', 'dsw-badge off', '—')
@@ -2341,7 +2432,7 @@ function Panel(): any {
     trendCard.append(legend, trendBox)
     tokenPane.append(trendCard)
 
-    const rankCard = el('div', 'dsw-card')
+    const rankCard = el('div', 'dsw-card boxed')
     const rankHead = el('div', 'dsw-cardhead')
     rankHead.append(el('span', 'name', '用量分布'))
     const rankTabs = el('div', 'dsw-subtabs')
@@ -2372,6 +2463,7 @@ function Panel(): any {
     rankHead.append(rankTabs)
     const ranks = el('div', 'dsw-ranks')
     rankCard.append(rankHead, ranks)
+    rankCard.append(el('p', 'dsw-carddesc', '按账号或按模型看谁在消耗配额。'))
     tokenPane.append(rankCard)
 
     const tokenRow = el('div', 'dsw-row')
@@ -2541,12 +2633,18 @@ function Panel(): any {
     // 实测：Node fetch 的 JA4 是 `t13d…h1`（不走 HTTP/2、cipher 数量差 3 倍多、不带 GREASE）；
     // 换成 Chromium 网络栈后 cipher 列表哈希与 Chrome **逐字节一致**。所以默认走 Chromium。
     // 但要留开关：Chromium 会跟随**系统代理**（Node 完全无视代理），梯子关着时可能反而连不上。
-    const transportCard = el('div', 'dsw-card')
+    const transportCard = el('div', 'dsw-card boxed')
     transportCard.append(el('div', 'dsw-cardhead', '传输层（指纹）'))
+    transportCard.append(el('p', 'dsw-carddesc', '请求从哪出去。改完下一轮生效。'))
 
-    const transportRow = el('div', 'dsw-gate-row')
-    transportRow.append(el('span', 'dsw-gate-label', '请求从哪出去'))
+    const transportRow = el('div', 'dsw-field wide')
+    const transportMain = el('div', 'dsw-field-main')
+    transportMain.append(
+      el('div', 'dsw-field-title', '请求从哪出去'),
+      el('div', 'dsw-field-desc', '浏览器网络栈发的请求指纹与网页端一致（推荐）；Node 直连更快但指纹对不上。'),
+    )
     const transportBtns: Record<string, HTMLButtonElement> = {}
+    const transportCtrl = el('div', 'dsw-field-ctrl')
     for (const pair of [
       ['chromium', 'Chrome 网络栈（推荐）'],
       ['node', 'Node'],
@@ -2555,8 +2653,9 @@ function Panel(): any {
       const btn = el('button', 'dsw-btn ghost dsw-preset', pair[1]) as HTMLButtonElement
       btn.addEventListener('click', () => void saveTransport(key))
       transportBtns[key] = btn
-      transportRow.append(btn)
+      transportCtrl.append(btn)
     }
+    transportRow.append(transportMain, transportCtrl)
     transportCard.append(transportRow)
 
     const transportHint = el('p', 'dsw-hint', '')
@@ -2564,9 +2663,16 @@ function Panel(): any {
     const transportProxyHint = el('p', 'dsw-hint', '')
     transportCard.append(transportProxyHint)
 
-    const testRow = el('div', 'dsw-gate-row')
+    const testRow = el('div', 'dsw-field wide')
+    const testMain = el('div', 'dsw-field-main')
+    testMain.append(
+      el('div', 'dsw-field-title', '连通性测试'),
+      el('div', 'dsw-field-desc', '发一个最小的真实请求验证整条链路，不消耗额度。'),
+    )
     const transportTestBtn = el('button', 'dsw-btn ghost', '测试传输层（零额度）') as HTMLButtonElement
-    testRow.append(transportTestBtn)
+    const testCtrl = el('div', 'dsw-field-ctrl')
+    testCtrl.append(transportTestBtn)
+    testRow.append(testMain, testCtrl)
     transportCard.append(testRow)
 
     const transportTestOut = el('div', 'dsw-msg', '')
@@ -2583,11 +2689,17 @@ function Panel(): any {
     // 浏览器不是这么干的（只有会话第一条 parent 是 null），链式投喂就是照它做：
     // 只发增量、把上一条回答挂成父消息。代价是工具协议只存在于链首那条消息里，
     // 一旦服务端把早期上下文丢掉，模型可能不按约定格式发工具调用 —— 所以默认仍是全量。
-    const contextCard = el('div', 'dsw-card')
+    const contextCard = el('div', 'dsw-card boxed')
     contextCard.append(el('div', 'dsw-cardhead', '上下文投喂方式'))
-    const contextRow = el('div', 'dsw-gate-row')
-    contextRow.append(el('span', 'dsw-gate-label', '每轮发什么'))
+    contextCard.append(el('p', 'dsw-carddesc', '每轮把多少历史发给服务端 —— 省 token 与稳定性的取舍。'))
+    const contextRow = el('div', 'dsw-field wide')
+    const contextMain = el('div', 'dsw-field-main')
+    contextMain.append(
+      el('div', 'dsw-field-title', '每轮发什么'),
+      el('div', 'dsw-field-desc', '全量每轮重发整段历史（稳但贵）；链式只发增量（省，但服务端丢上下文时模型可能不按格式调工具）。'),
+    )
     const contextBtns: Record<string, HTMLButtonElement> = {}
+    const contextCtrl = el('div', 'dsw-field-ctrl')
     for (const pair of [
       ['full', '每轮全量（默认）'],
       ['chained', '链式投喂（只发增量）'],
@@ -2596,8 +2708,9 @@ function Panel(): any {
       const btn = el('button', 'dsw-btn ghost dsw-preset', pair[1]) as HTMLButtonElement
       btn.addEventListener('click', () => void saveContextMode(key))
       contextBtns[key] = btn
-      contextRow.append(btn)
+      contextCtrl.append(btn)
     }
+    contextRow.append(contextMain, contextCtrl)
     contextCard.append(contextRow)
     const contextStatus = el('p', 'dsw-hint', '')
     contextCard.append(contextStatus)
@@ -2609,12 +2722,20 @@ function Panel(): any {
     // 运行时注入（`Current runtime context … supersedes earlier snapshots`），
     // 投喂链几乎每个回合都要重开，而"重开链就换会话"于是每回合都生效。
     // 关掉后一个窗口始终只用一个网页端会话；开 = 恢复 0.6.10 的老行为。
-    const freshRow = el('div', 'dsw-gate-row')
+    const freshRow = el('div', 'dsw-field')
+    const freshMain = el('div', 'dsw-field-main')
+    freshMain.append(
+      el('div', 'dsw-field-title', '重开链时换新会话'),
+      el('div', 'dsw-field-desc', '关：一个窗口始终只用一个网页端会话；开：每回合重开链都换，网页端会多出一堆（0.6.10 的老行为）。'),
+    )
     const freshLabel = el('label', 'dsw-switch')
     const freshInput = el('input', 'dsw-switch-input') as HTMLInputElement
     freshInput.type = 'checkbox'
-    freshLabel.append(freshInput, el('span', 'dsw-switch-track'), el('span', undefined, '重开链时换新会话'))
-    freshRow.append(freshLabel)
+    freshInput.setAttribute('aria-label', '重开链时换新会话')
+    freshLabel.append(freshInput, el('span', 'dsw-switch-track'))
+    const freshCtrl = el('div', 'dsw-field-ctrl')
+    freshCtrl.append(freshLabel)
+    freshRow.append(freshMain, freshCtrl)
     contextCard.append(freshRow)
     const freshHint = el('p', 'dsw-hint', '')
     contextCard.append(freshHint)
@@ -2683,8 +2804,9 @@ function Panel(): any {
     // ── 关于页：版本与更新 / 数据位置 / 风险提示 ────────────────────
     // 单独一个标签而不是塞进别的页：这三块都是"偶尔看一眼"的信息，
     // 混进日常操作的页里只会稀释注意力。
-    const aboutCard = el('div', 'dsw-card')
+    const aboutCard = el('div', 'dsw-card boxed')
     aboutCard.append(el('div', 'dsw-cardhead', '版本与更新'))
+    aboutCard.append(el('p', 'dsw-carddesc', '当前版本、检查更新与更新日志。'))
     const versionKv = el('div', 'dsw-kv')
     aboutCard.append(versionKv)
     const updateRow = el('div', 'dsw-row')
@@ -2741,8 +2863,9 @@ function Panel(): any {
       })()
     })
 
-    const pathsCard = el('div', 'dsw-card')
+    const pathsCard = el('div', 'dsw-card boxed')
     pathsCard.append(el('div', 'dsw-cardhead', '数据位置'))
+    pathsCard.append(el('p', 'dsw-carddesc', '这些文件都在本机；删掉等于清空全部状态。'))
     pathsCard.append(
       el('p', 'dsw-hint', '插件的本地状态都在 DSH 主目录下，不进通用配置面（避免凭证混进 settings/credentials）。'),
     )
@@ -2766,8 +2889,9 @@ function Panel(): any {
       }
     }
 
-    const riskCard = el('div', 'dsw-card')
+    const riskCard = el('div', 'dsw-card boxed')
     riskCard.append(el('div', 'dsw-cardhead', '关于「自动换号」（默认关闭）'))
+    riskCard.append(el('p', 'dsw-carddesc', '按时间轮换账号，把请求密度摊薄。'))
     riskCard.append(
       el(
         'p',
@@ -2913,8 +3037,7 @@ function Panel(): any {
           ? `固定间隔 ${lo}ms（上下限相等）。建议拉开成区间 —— 固定值方差≈0，是明显的「定时器特征」。`
           : `实际等待在 ${lo}~${hi}ms 之间随机取值（均值约 ${Math.round((lo + hi) / 2)}ms）。`
 
-      presetRow.textContent = ''
-      presetRow.append(el('span', 'dsw-gate-label', '快捷'))
+      presetCtrl.textContent = ''
       const presets: { min: number; max: number }[] =
         g.presets ?? [{ min: 1_500, max: 2_500 }, { min: 2_000, max: 4_000 }, { min: 5_000, max: 9_000 }]
       for (const preset of presets) {
@@ -2931,7 +3054,7 @@ function Panel(): any {
         if (isDefault && g.minRequestIntervalMs === preset.min && g.maxRequestIntervalMs === preset.max) {
           btn.classList.add('active')
         }
-        presetRow.append(btn)
+        presetCtrl.append(btn)
       }
 
       const capBounds = g.maxPromptCharsBounds ?? { min: 120_000, max: 1_500_000 }

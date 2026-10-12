@@ -130,7 +130,7 @@ const demo = `
     <button class="dsw-subtab active">登录</button><button class="dsw-subtab">账号库</button>
   </div>
 
-  <div class="dsw-card">
+  <div class="dsw-card boxed">
     <div class="dsw-cardhead">登录状态 <span class="dsw-badge on">已捕获（未校验）</span></div>
     ${kv(
       ['适配器注册', '✅ deepseek-web 已注册到 llm'],
@@ -151,7 +151,7 @@ const demo = `
     <p class="dsw-hint">「用我的默认浏览器登录」= 用系统浏览器打开 chat.deepseek.com（网页端若提示「使用环境异常」，走这条）。外部浏览器的登录态插件抓不到，要用 F12 控制台取 token 粘到下面那张卡。</p>
   </div>
 
-  <div class="dsw-card">
+  <div class="dsw-card boxed">
     <div class="dsw-cardhead">当前账号</div>
     ${kv(['账号', '143******@qq.com'], ['登录时间', '2026/9/11 11:08:35'])}
     <div class="dsw-row" style="margin-top:10px">
@@ -161,7 +161,7 @@ const demo = `
     <p class="dsw-hint">退出会同时清除本地凭证与浏览器分区里的 chat.deepseek.com 登录态。</p>
   </div>
 
-  <div class="dsw-card">
+  <div class="dsw-card boxed">
     <div class="dsw-cardhead">账号库 <span class="dsw-badge off">3 个账号</span></div>
     <div class="dsw-grouphead">
       <span class="gtoggle">▾</span><span class="gname">工作</span><span class="gcount">2</span>
@@ -199,56 +199,93 @@ const demo = `
     </div>
   </div>
 
-  <div class="dsw-card">
+  <div class="dsw-card boxed">
     <div class="dsw-cardhead">请求节流</div>
-    <div class="dsw-gate-row">
-      <label class="dsw-switch"><input type="checkbox"><span class="dsw-switch-track"></span><span>允许并发生成</span></label>
-      <label class="dsw-switch"><input type="checkbox" checked><span class="dsw-switch-track"></span><span>退出时清理网页端会话</span></label>
-    </div>
-    <div class="dsw-gate-row">
-      <span class="dsw-gate-label">请求间隔</span>
-      <div class="dsw-range-pair">
-        <input type="range" class="dsw-range" value="30"><input type="range" class="dsw-range" value="60">
+    <p class="dsw-carddesc">决定会不会被账号级限流。改完即时生效并落盘，不用重启。</p>
+    <div class="dsw-field">
+      <div class="dsw-field-main">
+        <div class="dsw-field-title">允许并发生成</div>
+        <div class="dsw-field-desc">同一账号同时发两条请求。实测双窗口并发 6 分钟内被限流 1 天，不建议开。</div>
       </div>
-      <span class="dsw-gate-pair-value">2~4 秒</span>
+      <div class="dsw-field-ctrl"><label class="dsw-switch"><input type="checkbox"><span class="dsw-switch-track"></span></label></div>
     </div>
-    <div class="dsw-gate-row">
-      <span class="dsw-gate-label">长休阈值</span>
-      <input type="range" class="dsw-range" value="15"><span class="dsw-gate-value">15 次</span>
+    <div class="dsw-field">
+      <div class="dsw-field-main">
+        <div class="dsw-field-title">退出时清理网页端会话</div>
+        <div class="dsw-field-desc">退出 DSH 时删掉本插件建的会话，避免侧栏堆积。</div>
+      </div>
+      <div class="dsw-field-ctrl"><label class="dsw-switch"><input type="checkbox" checked><span class="dsw-switch-track"></span></label></div>
+    </div>
+    <div class="dsw-field wide">
+      <div class="dsw-field-main">
+        <div class="dsw-field-title">请求间隔</div>
+        <div class="dsw-field-desc">两次请求之间的等待区间，在区间内随机取值。</div>
+      </div>
+      <div class="dsw-field-ctrl">
+        <div class="dsw-range-pair">
+          <input type="range" class="dsw-range" value="30"><input type="range" class="dsw-range" value="60">
+        </div>
+        <span class="dsw-gate-pair-value">2~4 秒</span>
+      </div>
+    </div>
+    <div class="dsw-field wide">
+      <div class="dsw-field-main">
+        <div class="dsw-field-title">长休阈值</div>
+        <div class="dsw-field-desc">连续 N 次请求后插入一次较长等待。</div>
+      </div>
+      <div class="dsw-field-ctrl">
+        <input type="range" class="dsw-range" value="15"><span class="dsw-gate-value">15 次</span>
+      </div>
     </div>
     <div class="dsw-row">
       <button class="dsw-btn ghost dsw-preset active">保守</button>
       <button class="dsw-btn ghost dsw-preset">均衡</button>
       <button class="dsw-btn ghost dsw-preset">激进</button>
     </div>
-    <div class="dsw-gate-row">
-      <span class="dsw-gate-label">图片上限</span>
-      <input type="range" class="dsw-range" value="24"><span class="dsw-gate-value">24 份</span>
+    <div class="dsw-field wide">
+      <div class="dsw-field-main">
+        <div class="dsw-field-title">图片上限</div>
+        <div class="dsw-field-desc">一次请求最多带最近的 24 张图片，更早的在本次请求里略过 —— 这是正常的长度控制，不是错误。</div>
+      </div>
+      <div class="dsw-field-ctrl">
+        <input type="range" class="dsw-range" value="24"><span class="dsw-gate-value">24 份</span>
+      </div>
     </div>
-    <div class="dsw-gate-row">
-      <span class="dsw-gate-label">上下文</span>
-      <input type="range" class="dsw-range" min="0" max="5" step="1" value="2"><span class="dsw-gate-value">128K</span>
+    <div class="dsw-field wide">
+      <div class="dsw-field-main">
+        <div class="dsw-field-title">上下文窗口</div>
+        <div class="dsw-field-desc">声明 128K：DSH 会更早压缩/截断历史，每轮重发的转写因此更短。这只是声明值，不改模型真实能力。</div>
+      </div>
+      <div class="dsw-field-ctrl">
+        <input type="range" class="dsw-range" min="0" max="5" step="1" value="2"><span class="dsw-gate-value">128K</span>
+      </div>
     </div>
-    <p class="dsw-hint">声明 128K：DSH 会更早压缩/截断历史，每轮重发的转写因此更短。这只是声明值，不改模型真实能力；想彻底压住单次体量，上面的「prompt 上限」也要一起调。</p>
-    <div class="dsw-gate-row">
-      <span class="dsw-gate-label">自动换号</span>
-      <input type="range" class="dsw-range" min="0" max="120" step="1" value="30"><span class="dsw-gate-pair-value">30 分钟</span>
+    <div class="dsw-field wide">
+      <div class="dsw-field-main">
+        <div class="dsw-field-title">自动换号</div>
+        <div class="dsw-field-desc">每 30 分钟换到账号库里的下一个可用账号。换号会让投喂链断掉：下一轮全量重发，网页端也会多出一个会话。上次自动换号：09:12（工作号 → lidi******@gmail.com，原账号刚被限流）。</div>
+      </div>
+      <div class="dsw-field-ctrl">
+        <input type="range" class="dsw-range" min="0" max="120" step="1" value="30"><span class="dsw-gate-pair-value">30 分钟</span>
+      </div>
     </div>
-    <p class="dsw-hint">每 30 分钟换到账号库里的下一个可用账号（失效或正在受限的会跳过；可用的不足两个就不换）。换号会让投喂链断掉：下一轮要全量重发，历史图也要重新上传 —— 间隔越短，这个代价出现得越频繁。上次自动换号：09:12（工作号 → lidi******@gmail.com，原账号刚被限流）。</p>
-    <div class="dsw-gate-row">
-      <label class="dsw-switch"><input type="checkbox"><span class="dsw-switch-track"></span><span>允许并行调用工具</span></label>
+    <div class="dsw-field">
+      <div class="dsw-field-main">
+        <div class="dsw-field-title">允许并行调用工具</div>
+        <div class="dsw-field-desc">默认：一次只发一个工具调用，等结果回来再决定下一步 —— 逐步反应更稳，代价是每个工具各占一轮请求。</div>
+      </div>
+      <div class="dsw-field-ctrl"><label class="dsw-switch"><input type="checkbox"><span class="dsw-switch-track"></span></label></div>
     </div>
-    <p class="dsw-hint">默认：一次只发一个工具调用，等结果回来再决定下一步 —— 后一步能用上前一步的真实结果，逐步反应更稳。代价是每个工具各占一轮请求，任务总耗时明显变长。切换后的第一轮会全量重发一次。</p>
     <p class="dsw-gate-msg">当前：每 2~4 秒发一个请求，连续 15 次后休息 30~90 秒。</p>
   </div>
 
-  <div class="dsw-card">
+  <div class="dsw-card boxed">
     <div class="dsw-cardhead">调用台账</div>
     ${spark}
     ${kv(['今日调用', '164 次'], ['今日 tokens', '1042.8 万'], ['失败', '3 次'])}
   </div>
 
-  <div class="dsw-card">
+  <div class="dsw-card boxed">
     <div class="dsw-cardhead">手动粘贴 Token（可选路径）</div>
     <textarea class="dsw-area" placeholder="粘贴 token（纯字符串或 JSON 均可）"></textarea>
     <div class="dsw-row" style="margin-top:8px">
@@ -257,7 +294,7 @@ const demo = `
     <div class="dsw-msg err">凭证校验失败：invalid token（HTTP 401）</div>
   </div>
 
-  <div class="dsw-card">
+  <div class="dsw-card boxed">
     <div class="dsw-cardhead">数据位置</div>
     <div class="dsw-kv">
       <div class="k">配置</div><div class="dsw-path">C:\\Users\\29436\\.dsh\\web-login\\gate.json</div>
@@ -265,7 +302,7 @@ const demo = `
     </div>
     <code class="dsw-code">dsh plugin add ./dsh-deepseek-web-login-0.2.1.tgz</code>
   </div>
-  <div class="dsw-card">
+  <div class="dsw-card boxed">
     <div class="dsw-cardhead">关于「自动换号」（默认关闭）</div>
     <p class="dsw-hint">💡 账号库支持一键手动切换；「防风控」页的「自动换号」滑块可以让它按时间轮换 —— 但默认是关闭的，因为下面这些理由仍然成立：开它是在拿「降低机器特征」换「摊薄单账号密度」。</p>
     <p class="dsw-hint">参考项目切的是「CLI 下次启动用哪个账号」——服务端看不到；而我们每次对话都实时发请求。真人不会在几分钟内换一个账号接着发消息，自动换号是极强的机器行为特征，与本插件在传输层指纹、随机间隔、会话清理上「降低机器可识别性」的努力直接冲突。⇒ 所以它默认关闭，而且判据只看时间、不看限流状态（"一被限流就换"更糟：同一出口 IP 上多号交替活跃，更像有组织的规避）。</p>
@@ -284,7 +321,7 @@ const demo = `
     <div class="dsw-stat"><div class="k">调用次数</div><div class="v">164</div><div class="n">成功 161 · 失败 3</div></div>
   </div>
 
-  <div class="dsw-card">
+  <div class="dsw-card boxed">
     <div class="dsw-cardhead"><span class="name">按天用量</span> <span class="dsw-badge on">近 30 天</span></div>
     <p class="dsw-hint">柱高＝当天的输入 + 输出；虚线＝当天调用次数。鼠标停在柱上可看具体数字。</p>
     <div class="dsw-legend">
@@ -295,7 +332,7 @@ const demo = `
     ${trend}
   </div>
 
-  <div class="dsw-card">
+  <div class="dsw-card boxed">
     <div class="dsw-cardhead"><span class="name">用量分布</span>
       <div class="dsw-subtabs"><button class="dsw-subtab active">按账号</button><button class="dsw-subtab">按模型</button></div>
     </div>
