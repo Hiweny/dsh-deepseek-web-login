@@ -10,11 +10,11 @@
  * 这里按文件名扫全量，新增用例自动纳入。
  */
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, openSync, closeSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { pickOfflineTests } from './test-files.mjs'
+import { pickOfflineTests, pickDiagnosis } from './test-files.mjs'
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const testsDir = join(ROOT, 'tests')
@@ -47,32 +47,63 @@ const SANDBOX_HOME = mkdtempSync(join(tmpdir(), 'dsh-web-login-tests-'))
  */
 const SLOW_FILES = { 'check-browser-transport.mjs': 600_000 }
 
+/**
+ * 每个用例的输出落到**文件**里，而不是 pipe，也不是直接 inherit。
+ *
+ * - 不用 pipe：子进程里可能留下浏览器/守护进程握着管道，`spawnSync` 会一直等它。
+ * - 不用 inherit：那样输出只进 job 日志 —— 而 job 日志在无 token 时下载是 403
+ *   （2026-10-14 实测：win 上 `check-browser-transport` 报红，除了"退出码 1"什么也拿不到）。
+ *   存文件后可以把**失败原因**一并做成 annotation，界面与 API 都能看到。
+ */
+const LOG_DIR = mkdtempSync(join(tmpdir(), 'dsh-offline-logs-'))
+
 const failed = []
 for (const file of files) {
   console.log(`\n=== ${file} ===`)
-  const result = spawnSync(process.execPath, [join(testsDir, file)], {
-    cwd: ROOT,
-    stdio: 'inherit',
-    env: { ...process.env, DSH_HOME: SANDBOX_HOME },
-    // 单个文件的上限：超过说明有东西挂住了（而不是"慢"）。慢的用例见 SLOW_FILES。
-    timeout: SLOW_FILES[file] ?? 180_000,
-  })
+  const logPath = join(LOG_DIR, `${file}.log`)
+  const fd = openSync(logPath, 'w')
+  let result
+  try {
+    result = spawnSync(process.execPath, [join(testsDir, file)], {
+      cwd: ROOT,
+      stdio: ['ignore', fd, fd],
+      env: { ...process.env, DSH_HOME: SANDBOX_HOME },
+      // 单个文件的上限：超过说明有东西挂住了（而不是"慢"）。慢的用例见 SLOW_FILES。
+      timeout: SLOW_FILES[file] ?? 180_000,
+    })
+  } finally {
+    closeSync(fd)
+  }
+  let output = ''
+  try {
+    output = readFileSync(logPath, 'utf8')
+  } catch {
+    /* 读不到就当空（下面的判定用的是退出状态，不依赖它） */
+  }
+
   if (result.error || result.status !== 0) {
     failed.push(file)
+    // 失败时回放全文：有 token 的人看 job 日志时上下文是全的
+    console.log(output.trimEnd())
     const why = result.error ? result.error.message : `退出码 ${result.status}`
     console.error(`FAIL ${file}：${why}`)
     /**
      * 🔴 让"CI 红"自带病因。GitHub 把 `::error::` 记成 annotation，
-     * 于是**不用下载日志**（无 token 时那是 403）也能从界面/API 看到是哪个文件红的。
-     * 2026-10-14 实测：win/mac 两个 runner 报红、ubuntu 绿，而日志拿不到 ——
-     * 没有这一行就只能整轮整轮地猜是哪个用例。
+     * 于是**不用下载日志**（无 token 时那是 403）也能从界面/API 看到是哪个文件、哪一条红的。
+     * 2026-10-14 实测：win 上 `check-browser-transport` 报红、ubuntu/mac 绿，
+     * 而日志拿不到 ⇒ 只能把文件名与失败行推出来。
      */
-    console.error(`::error::离线用例失败：${file}（${why}）`)
+    console.error(`::error::离线用例失败：${file}（${why}）\n${pickDiagnosis(output).slice(0, 1200)}`)
+  } else {
+    // 成功也留一行：把每个用例自报的"通过 N 项"带出来，日志才有进度可看
+    const summary = output.trimEnd().split('\n').filter(Boolean).pop() ?? '(无输出)'
+    console.log(`  ${summary}`)
   }
 }
 
 try {
   rmSync(SANDBOX_HOME, { recursive: true, force: true })
+  rmSync(LOG_DIR, { recursive: true, force: true })
 } catch {
   /* 清理失败无所谓，临时目录 */
 }

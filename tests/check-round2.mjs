@@ -1379,7 +1379,7 @@ await test('F08：落库抛错时也必须消费「添加模式」（否则下�
 // 这几条都是**契约**（文件里写了什么），所以直接断言文件内容 —— 改坏了立刻红。
 
 const { readFileSync: readText } = await import('node:fs')
-const { pickOfflineTests, isManualProbe } = await import('../scripts/test-files.mjs')
+const { pickOfflineTests, isManualProbe, pickDiagnosis } = await import('../scripts/test-files.mjs')
 
 const PKG_ROOT = process.cwd()
 const readRepoFile = (rel) => readText(join(PKG_ROOT, ...rel.split('/')), 'utf-8')
@@ -1458,6 +1458,39 @@ await test('F20：离线用例清单排除 probe-*（会打真实账号），且
   // 自证：目录里**确实**有 probe-*，所以"排除"不是因为不存在
   assert.ok(all.some((n) => n.startsWith('probe-')), '自证：目录里应当有 probe-*.mjs')
   assert.equal(picked.length, all.filter((n) => /^check-.*\.mjs$/.test(n)).length + 1, 'check-* 一个都不能漏')
+})
+
+await test('F20：跑批的失败注解要能挑出病因行（无 token 也能看到哪条红的）', async () => {
+  // 背景：2026-10-14 win runner 上 check-browser-transport 报红，而 job 日志下载是 403，
+  // 除了"退出码 1"什么都拿不到 ⇒ 跑批必须把失败行一起做成 annotation。
+  // ⚠️ 反向验证：让 pickDiagnosis 永远返回 '' → 这条变红。
+  const withBads = ['  ✓ 正常一条', '  x 甲：期望 200，实际 500', '  ✓ 又一条', '  x 乙：超时', '通过 8 项'].join('\n')
+  const d1 = pickDiagnosis(withBads)
+  assert.ok(d1.includes('甲：期望 200，实际 500'), `应带出失败行，实际：${JSON.stringify(d1)}`)
+  assert.ok(d1.includes('乙：超时'), '多条失败行都要带上')
+  assert.ok(!d1.includes('正常一条'), '不该把通过的行混进来')
+
+  // 有些用例是异常直接抛出、没走 `x ` 约定 ⇒ 退回尾部，不能空手而归
+  const thrown = ['阶段1', '阶段2', 'Error: boom', '    at somewhere'].join('\n')
+  assert.ok(pickDiagnosis(thrown).includes('boom'), '没有失败行时要退回尾部')
+
+  // `✗` 形态（check-request-headers 等用的就是这个）
+  assert.ok(pickDiagnosis('  ✗ 头多了一个：x-foo').includes('x-foo'), '✗ 形态也要挑得出来')
+
+  assert.equal(pickDiagnosis(''), '', '空输出不该崩')
+  assert.ok(
+    pickDiagnosis(Array.from({ length: 50 }, (_, i) => `x 第${i}条`).join('\n')).split('\n').length <= 8,
+    '注解有长度限制：最多带 8 行',
+  )
+})
+
+await test('F20：跑批把子进程输出落到文件（输出必须拿得到，不依赖可下载的日志）', async () => {
+  // ⚠️ 反向验证：把 stdio 改回 'inherit'（或去掉注解）→ 这条变红。
+  const offline = readRepoFile('scripts/test-offline.mjs')
+  assert.ok(offline.includes('pickDiagnosis'), '跑批必须用 pickDiagnosis 挑病因')
+  assert.ok(offline.includes('::error::'), '失败必须产出 ::error:: 注解')
+  assert.ok(offline.includes("stdio: ['ignore', fd, fd]"), '子进程输出必须落文件（用 fd 而不是 inherit/pipe）')
+  assert.ok(offline.includes('readFileSync(logPath'), '落文件之后要真读出来')
 })
 
 await test('F20：CI 三平台都装依赖、构建、跑全量用例，并固定 Node 小版本', async () => {

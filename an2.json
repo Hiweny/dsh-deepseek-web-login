@@ -1,0 +1,38 @@
+[
+  {
+    "path": ".github",
+    "blob_href": "https://github.com/cv-superding/dsh-deepseek-web-login/blob/6d8ba18d327c0ae6cf5669cd74cd9ba5ad3ae456/.github",
+    "start_line": 2,
+    "start_column": null,
+    "end_line": 2,
+    "end_column": null,
+    "annotation_level": "warning",
+    "title": "",
+    "message": "Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/",
+    "raw_details": ""
+  },
+  {
+    "path": ".github",
+    "blob_href": "https://github.com/cv-superding/dsh-deepseek-web-login/blob/6d8ba18d327c0ae6cf5669cd74cd9ba5ad3ae456/.github",
+    "start_line": 1211,
+    "start_column": null,
+    "end_line": 1211,
+    "end_column": null,
+    "annotation_level": "failure",
+    "title": "",
+    "message": "Process completed with exit code 1.",
+    "raw_details": ""
+  },
+  {
+    "path": ".github",
+    "blob_href": "https://github.com/cv-superding/dsh-deepseek-web-login/blob/6d8ba18d327c0ae6cf5669cd74cd9ba5ad3ae456/.github",
+    "start_line": 136,
+    "start_column": null,
+    "end_line": 136,
+    "end_column": null,
+    "annotation_level": "failure",
+    "title": "",
+    "message": "离线用例失败：check-browser-transport.mjs（退出码 1）",
+    "raw_details": ""
+  }
+]

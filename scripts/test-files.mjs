@@ -27,3 +27,18 @@ export function isManualProbe(name) {
 export function resolveTestPaths(root, files) {
   return files.map((name) => join(root, 'tests', name))
 }
+
+/**
+ * 从某个用例的输出里挑出"病因"几行，供跑批把失败原因一起报出去。
+ *
+ * 🔴 为什么要挑：CI 上日志下载要么需要 token（无 token 时是 403）、要么得点进界面翻，
+ * 而 GitHub 会把 `::error::` 记成 annotation，**不用下载日志就能看到**。
+ * annotation 有长度限制 ⇒ 只能挑关键的几行：优先"失败行"（本仓库约定以 `x ` 或 `✗` 开头），
+ * 一行都没有时退回输出的尾部（有些用例是异常直接抛出、没走失败行约定）。
+ */
+export function pickDiagnosis(text) {
+  const lines = String(text ?? '').split('\n')
+  const bad = lines.filter((line) => /^\s*(x\s|✗)/.test(line))
+  const picked = bad.length ? bad.slice(-8) : lines.slice(-6)
+  return picked.join('\n').trim()
+}
