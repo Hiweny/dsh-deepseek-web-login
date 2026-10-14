@@ -586,6 +586,35 @@ function resolvedModelInfo(
     reasoning: spec.configurableThinking
       ? { efforts: REASONING_EFFORTS, defaultEffort: spec.thinking ? EFFORT_HIGH : EFFORT_OFF }
       : { efforts: OFF_ONLY_EFFORTS, defaultEffort: EFFORT_OFF },
+    /**
+     * 🔴 两项**路由能力声明**（2026-10-14 加）。它们不改我们发什么，而是改 **DSH 给我们什么**。
+     *
+     * 契约（官方 `LlmResolvedModelInfo`，`packages/llm/llm/src/types.ts`）：
+     *  - `systemPromptUpdate: 'in-history'`
+     *    —— 中途变化的系统提示词由模型"读历史里最后一条 system 消息"取得，
+     *    所以 harness 不必重写会话首条消息（`SystemPromptProjection.project()`：
+     *    `inHistory` 为真时改为 `append`，为假时 `replace` 首节点并把后续节点清空）。
+     *  - `toolUpdate: 'in-history'`
+     *    —— 工具集变更以 `role:'developer'` 消息（`tool-addition` / `tool-removal`）随历史下发，
+     *    声明列表本身保持"只增不减"（`content.ts` 的 `toolDeclarations()`：`in-history`
+     *    分支**不删**条目；`addition-only` 分支会把移除的工具从列表里删掉 ⇒ 目录仍会变）。
+     *
+     * **不声明会怎样**：`toolDeclarations` 之外还有一条 —— 每次工具集变化都被判为
+     * "必须开新请求序列"（`agent.ts`：`preparedCall?.toolUpdate === undefined && this.toolsChanged(...)`），
+     * 于是固定头（工具目录）变化 ⇒ 本地投喂链的前缀判据失败 ⇒ 全量重发。
+     * 真机证据（2026-10-14 解 82 个会话日志）：`role:"developer"` 17 处、
+     * `tool-addition` 181、`tool-removal` 78，其中一条一次会话中途新增 10 个工具 ——
+     * 这在未声明时每一条都会打断投喂链。
+     *
+     * ⚠️ 三项配套缺一不可，否则会造出新的缺陷（与 2026-10-02 那个 `role:'tool'` 同类）：
+     *  ① 这里声明；② `src/protocol.ts` 的 `role === 'developer'` 分支渲染变更块；
+     *  ③ `buildToolSection()` 把 `deferLoading` 的工具挡在固定头之外。
+     *
+     * ⚠️ harness 会**校验**这两个字段（`llm/src/index.ts`：非法值直接抛
+     * `adapter returned invalid system prompt update mode`），拼错比不写更糟。
+     */
+    systemPromptUpdate: 'in-history' as const,
+    toolUpdate: 'in-history' as const,
   }
 }
 

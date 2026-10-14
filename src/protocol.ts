@@ -13,6 +13,22 @@ export interface ToolSchemaLike {
   name: string
   description: string
   parameters: Record<string, unknown>
+  /**
+   * 🔴 DSH 的「延迟加载」标记（`ToolSchema.deferLoading`，官方 0.2.x 契约）。
+   *
+   * 语义（官方原文）：*Requests deferred loading of the tool definition into model context,
+   * independently of whether a tool-addition block records the tool.*
+   *
+   * 谁会带上它：只有**中途新增**（MCP / 技能加载）的工具 —— harness 的
+   * `projectToolUpdates()` 在 `toolDeclarations()` 里给 `history.updates` 里的新增项
+   * 补 `{...tool, deferLoading: true}`（`harness/packages/llm/llm/src/content.ts:391`）。
+   * 会话起始就存在的工具是基线，**不带**这个标记。
+   *
+   * 🔴 为什么必须认它：带标记的工具**不能进固定头**。它一旦出现在工具目录里，
+   * 新增一个工具就改一次 head ⇒ 投喂链断 ⇒ 全量重发（见 2026-10-14 的取证）。
+   * 正确做法是让它们在历史里按需激活，见 `renderDeveloperUpdates()`。
+   */
+  deferLoading?: true
 }
 
 export interface ToolCallRequest {
@@ -467,13 +483,26 @@ export function buildToolSection(
   maxChars: number = MAX_TOOLS_SECTION_CHARS,
 ): string {
   if (!tools || tools.length === 0) return ''
+  // 🔴 延迟加载的工具（`deferLoading: true`）**不进固定头**。
+  // 它们由历史里的 `[Tool added: …]` 块按需激活（见 renderDeveloperUpdates）。
+  // 判据：只要它们出现在目录里，中途新增一个工具就会改 head ⇒ 投喂链断 ⇒ 全量重发。
+  const immediate = tools.filter((tool) => tool?.deferLoading !== true)
+  // 🔴 **失效保护**：全被标成延迟项时**回退到渲染全部**。
+  //
+  // 什么时候会全被标上：harness 的 `toolDeclarations()` 以 `history.tools`
+  // （本次会话序列起始时的活动工具表）为基线，只给**之后新增**的补 `deferLoading`。
+  // 若基线为空、而当前工具全都算"新增"，就会全部带标记。
+  //
+  // 取舍写清楚：**目录为空 = agent 完全不能用工具**，这比"head 会变 ⇒ 链断"严重得多。
+  // 所以宁可牺牲这一次的链稳定性，也不允许发一份没有工具目录的提示词。
+  const usable = immediate.length > 0 ? immediate : tools
   const parts: string[] = ['', '## Available tools']
   // 预算取「内置上限」与「调用方给的额度」的较小值。
   // 调用方（serializePrompt）会按剩余空间算一个动态额度传进来 —— 见下面 F18 的注释。
   let budget = Math.max(0, Math.min(MAX_TOOLS_SECTION_CHARS, maxChars))
 
-  const coreTools = tools.filter((tool) => isCoreTool(tool?.name))
-  const tailTools = tools.filter((tool) => !isCoreTool(tool?.name))
+  const coreTools = usable.filter((tool) => isCoreTool(tool?.name))
+  const tailTools = usable.filter((tool) => !isCoreTool(tool?.name))
 
   /**
    * 预算用尽时的兜底：**必须把剩下的工具名说出来**，并明确要求别猜参数。
@@ -718,6 +747,74 @@ export interface PromptParts {
   transcript: string
 }
 
+/**
+ * 渲染一条 DSH `developer` 消息里的**工具变更块**（2026-10-14 加）。
+ *
+ * 背景：harness 会为「中途新增 / 移除的工具」写一条 `role:'developer'`
+ * （`source.kind === 'tool-registry'`）的消息，content 形如
+ * `[{type:'tool-addition', toolName:'multi_search'}, …]`。
+ *
+ * 真机证据（2026-10-14 解开 82 个真机会话日志）：`role:"developer"` 17 处、
+ * `tool-addition` 181、`tool-removal` 78；抽到完整事件行来确认过形态，其中一条
+ * 一次会话中途新增了 **10 个工具**。
+ *
+ * 🔴 **必须与 adapter 里的 `toolUpdate` 声明成对出现**：harness 只在路由声明了该能力时
+ * 才把这些消息交给我们（未声明时 `harness/.../content.ts` 的 `withoutDeveloperMessages()`
+ * 会把它们整体剥掉）。只声明不加这个分支的话，developer 消息会掉进下面的 `user` 分支、
+ * 被渲染成 `User: {"type":"tool-addition",…}` —— 与 2026-10-02 那个 `role:'tool'` 的
+ * 缺陷完全同类。
+ *
+ * ⚠️ 新增工具的 schema **只能在这里给**：带 `deferLoading` 的工具被
+ * `buildToolSection()` 挡在了固定头之外（否则新增一个工具就改一次 head ⇒ 链断）。
+ *
+ * @param blocks - developer 消息的 content 数组，原样来自 DSH。
+ * @param tools - 本次请求的完整工具列表（**含** `deferLoading` 的），用于按名字取 schema。
+ * @returns 逐行文本；未识别的块类型被忽略（保持向前兼容）。
+ */
+export function renderDeveloperUpdates(
+  blocks: readonly any[],
+  tools: readonly ToolSchemaLike[] | undefined,
+): string[] {
+  const byName = new Map<string, ToolSchemaLike>()
+  for (const tool of tools ?? []) {
+    if (tool && typeof tool.name === 'string') byName.set(tool.name, tool)
+  }
+  const lines: string[] = []
+  for (const block of blocks) {
+    if (!block || typeof block !== 'object') continue
+    if (block.type === 'text') {
+      const text = String(block.text ?? '').trim()
+      if (text) lines.push(text)
+      continue
+    }
+    if (block.type !== 'tool-addition' && block.type !== 'tool-removal') continue
+    // 官方字段名是 `toolName`（真机日志原文如此）；`name` 只作防御性别名。
+    const name = String(block.toolName ?? block.name ?? '').trim()
+    if (!name) continue
+    if (block.type === 'tool-removal') {
+      lines.push(`[Tool removed: ${name}] — it is no longer available, do not call it.`)
+      continue
+    }
+    const tool = byName.get(name)
+    const signature = tool ? buildToolSignature(tool, true) : null
+    let parametersText = signature ?? ''
+    if (signature === null) {
+      let schemaText = '{}'
+      try {
+        schemaText = JSON.stringify(tool?.parameters ?? {})
+      } catch {
+        schemaText = '{}'
+      }
+      parametersText = `Parameters (JSON Schema): ${schemaText}`
+    }
+    const description = String(tool?.description ?? '').replace(/\s+/g, ' ').trim()
+    lines.push(
+      [`[Tool added: ${name}]`, description, parametersText].filter((part) => part !== '').join('\n'),
+    )
+  }
+  return lines
+}
+
 export function serializePrompt(options: SerializeOptions): string {
   return serializePromptParts(options).full
 }
@@ -768,6 +865,16 @@ export function serializePromptParts(options: SerializeOptions): PromptParts {
   for (const message of options.messages ?? []) {
     if (!message || typeof message !== 'object') continue
     const blocks: any[] = Array.isArray(message.content) ? message.content : []
+    if (message.role === 'developer') {
+      // 🔴 **只有 adapter 声明了 `toolUpdate` 才会走到这里** —— 未声明时 harness 会在
+      // `projectToolUpdates()` 里把 developer 消息整体剥掉（`content.ts` 的
+      // `withoutDeveloperMessages`）。它与 src/adapter.ts 的 `resolvedModelInfo()` 是一对。
+      // 混进来的工具变更块在这里落成历史条目 ⇒ 固定头（工具目录）不必跟着变 ⇒ 投喂链可续。
+      for (const line of renderDeveloperUpdates(blocks, options.tools)) lines.push(line)
+      // 工具集变更意味着上一轮的工具调用必然已经收尾，清掉"下一个 user 文本 = 工具返回"的预期。
+      pendingToolCallIds = []
+      continue
+    }
     if (message.role === 'system') {
       const text = flattenText(blocks).join('')
       if (text.trim()) lines.push(`[System]\n${text}`)

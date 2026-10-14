@@ -2,6 +2,72 @@
 
 本项目大致遵循语义化版本；日期为本地时间。
 
+## 0.9.0 — 2026-10-14
+
+**声明两项 DSH 路由能力，让投喂链不再因「工具集 / 系统提示词变化」而断。**
+
+读官方 [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 源码（本地克隆在 `_ref/harness`，
+HEAD `0.2.1-alpha.2`）后发现：harness 让**路由自己声明**两项能力
+（`LlmResolvedModelInfo`，`packages/llm/llm/src/types.ts`）：
+
+| 字段 | 值 | 不声明时 harness 的行为 |
+|---|---|---|
+| `systemPromptUpdate` | `'in-history'` | 系统提示词一变就 **replace 会话首节点**（`SystemPromptProjection.project()`） |
+| `toolUpdate` | `'in-history'` | 工具集一变就被判为"必须开新请求序列"，且 developer 消息被整体剥掉（`projectToolUpdates()`） |
+
+两条都**直接改写会话历史的前缀** ⇒ 本插件的链式投喂（判据是「变长 + 链尾仍在同一位置」）
+必然失败 ⇒ 全量重发。
+
+**真机证据**（2026-10-14 解 82 个真机会话日志的 zstd 多帧）：`role:"developer"` 17 处、
+`tool-addition` 181、`tool-removal` 78；抽到完整事件行确认为真事件，其中一条会话
+**一次中途新增了 10 个工具**。也就是说这个默认行为在真实使用里频繁触发。
+
+### 三处改动（缺一即产生新缺陷）
+
+1. **`src/adapter.ts`** —— `resolvedModelInfo()` 声明 `systemPromptUpdate: 'in-history'`
+   与 `toolUpdate: 'in-history'`。⚠️ 选 `in-history` 而不是 `addition-only`：后者的
+   `toolDeclarations()` 分支会把**被移除的工具从声明列表里删掉** ⇒ 目录仍会变。
+2. **`src/protocol.ts`** —— 新增 `role === 'developer'` 分支（`renderDeveloperUpdates()`），
+   把 `tool-addition` / `tool-removal` 渲染成 `[Tool added: …]` / `[Tool removed: …]`。
+   漏了这一步，developer 消息会掉进 `user` 分支渲染成 `User: {"type":"tool-addition"…}` ——
+   与 0.1.x 那个 `role:'tool'` 的缺陷完全同类。
+3. **`src/protocol.ts`** —— `buildToolSection()` 把 `deferLoading` 的工具挡在固定头之外
+   （漏了它，新增一个工具就改一次 head，前两步白做），并把它们的 schema 挪到
+   第 2 步的历史块里给。
+
+### 失效保护
+
+若某次**所有**工具都带 `deferLoading`（harness 的基线 `history.tools` 为空、当前工具全算"新增"），
+目录会整个消失 —— 那比链断严重得多，因为 agent 一个工具都调不了。
+所以这种情况**回退到渲染全部**：宁可 head 抖一次，也不许发出没有工具目录的提示词。
+
+### 新增测试
+
+`tests/check-harness-capabilities.mjs`（13 条），守的是**行为**而不是源码位置：
+
+- `resolveModel` / `prepareCall` 声明了两项能力，且取值在 harness 允许的集合内；
+- 新增一个 `deferLoading` 工具时 **head 逐字节不变**，并配**反证**（不带 `deferLoading`
+  的工具必须改 head），防止过滤条件写成"一律过滤"导致延迟语义被抹掉；
+- `developer` 消息被渲染、且**没有**掉进 `user` 分支（形态用真机日志原文的 `toolName` 字段）；
+- 全部延迟 ⇒ 回退渲染全部。
+
+**已做变异验证**：5 处改动逐个还原，每一处都被对应用例抓住（红 2 / 2 / 3 / 2 / 1 条），
+还原后 13/13 绿。
+
+### 附：PTC（Code Mode）开关
+
+顺手查清官方有 `mode: 'native' | 'ptc'`（`packages/core/tools/src/index.ts`）——
+`ptc` 把所有工具塌缩成 SDK 声明 + 唯一 `run_code`，就是 cuckoo 那套做法，官方已实现，
+运行时 `@deepseek-ai/dsh-ptc-runtime-node` 挂在 base bundle。本机已具备。
+
+本插件**无需任何改动**即可受益，切换是 profile 层的事，所以做成了显式开关：
+`node tools/ptc-mode-toggle.mjs status | apply <presetId> | revert`
+（自带备份、YAML 校验失败自动回滚、幂等）。
+
+⚠️ **没有默认打开**，且**不推荐**为了省 token 打开：实测 37 个真机工具下本插件的紧凑目录
+是 12036 字符，而官方 SDK 段是带逐参数 JSDoc + 返回类型的 TS 声明、信息量严格更多，
+head 很可能**变大**。PTC 省的是每轮 chat 往返次数与 JSON 转义负担。
+
 ## 0.8.0 — 2026-10-12
 
 **设置面板视觉重构**：对齐 [Ebony-Vinyl/dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model) 的设置页。
