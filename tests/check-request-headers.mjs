@@ -193,9 +193,58 @@ test('没有 cookie 时不许留下空的 cookie 头（空头本身也可疑）'
   assert.equal(headers.referer, `${DS_BASE}/`)
 })
 
-test('归属声明头仍在（它是主动申报，不是指带头，别顺手删掉）', () => {
-  const headers = buildDsHeaders(AUTH)
-  assert.match(String(headers['x-deepseek-harness'] ?? ''), /deepseek-harness/)
+// 🔴 这一条**取代**了原先那句"归属声明头仍在（别顺手删掉）"。
+//
+// 2026-10-14 删掉了 `x-deepseek-harness` 与写死的 `x-app-version`：前者是本仓库自己造的，
+// 不在任何规范里（harness 的归属决策明确说"只用标准 User-Agent"、且"别按类比复用别的头"），
+// 而且它**每个请求都带、只有插件会带** —— 服务端一行 `if` 就能把两条流量分开。
+// 姊妹项目 `dsh-webin` 的 README 把它列为**最高风险单点**。
+//
+// 所以现在的判据不再是"某条文案还在"，而是**正向的头集合相等**：
+// 发出去的头 == 真实浏览器抓来的那批 + 逐请求那几个。多一个都算缺陷。
+test('★ 不许自报家门：发出去的头集合 == 真实浏览器的集合（+ 逐请求头）', () => {
+  // 这 11 项照抄线上账号记录里真实捕获的 `extraHeaders`（2026-10-14 核对）。
+  const CAPTURED = {
+    'x-client-locale': 'zh_CN',
+    'sec-ch-ua-platform': '"Windows"',
+    'x-client-bundle-id': 'com.deepseek.chat',
+    'x-device-id': '00000000-0000-0000-0000-000000000000',
+    'sec-ch-ua': '"Chromium";v="152", "Not:A-Brand";v="24"',
+    'sec-ch-ua-mobile': '?0',
+    'x-client-timezone-offset': '-28800',
+    'x-device-model': 'web',
+    'x-client-version': '2.5.0',
+    accept: 'application/json, text/plain, */*',
+    'x-client-platform': 'web',
+  }
+  const headers = buildDsHeaders({ ...AUTH, extraHeaders: { ...CAPTURED } })
+  const allowed = new Set([
+    ...Object.keys(CAPTURED),
+    // ⚠️ `accept-language` 不在捕获里，但**真浏览器必发**（Chrome/Edge 一定带）——
+    //    补上它是"更像浏览器"，不是"自报家门"，所以属于允许项。
+    //    这是本用例唯一的例外，加新例外前先想清楚它属于哪一类。
+    'accept-language',
+    // 逐请求现算的那几个（顺序无关，只判集合）
+    'user-agent', 'content-type', 'origin', 'referer', 'authorization', 'cookie',
+    'x-hif-dliq', 'x-hif-leim', 'x-ds-pow-response',
+  ])
+  const invented = Object.keys(headers).filter((key) => !allowed.has(key))
+  assert.deepEqual(
+    invented,
+    [],
+    `不该凭空多发头（这些头真实浏览器都不发，等于自证非浏览器）：${invented.join(', ')}`,
+  )
+  // 反向也要成立：抓来的必须**原样带出**，不能被"净化"掉。
+  for (const key of Object.keys(CAPTURED)) {
+    assert.equal(headers[key], CAPTURED[key], `抓来的 ${key} 被改了`)
+  }
+})
+
+test('★ 即使快照里混进了 x-deepseek-harness*，也一律不许发出去', () => {
+  for (const name of ['x-deepseek-harness', 'x-deepseek-harness-user-id', 'x-deepseek-harness-session-id']) {
+    const headers = buildDsHeaders({ ...AUTH, extraHeaders: { [name]: 'whatever' } })
+    assert.equal(name in headers, false, `${name} 不许发 —— 这是自报家门头`)
+  }
 })
 
 console.log()

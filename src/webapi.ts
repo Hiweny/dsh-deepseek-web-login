@@ -80,9 +80,6 @@ export function buildDsHeaders(auth: WebAuth, referer?: string): DsHeaders {
     // 写死值必然随网页端发版而过时 —— 过时的后果是功能降级（"更新到最新版才能用专家/识图"），
     // 不是鉴权失败。
     'x-client-version': FALLBACK_CLIENT_VERSION,
-    // ⚠️ 真实浏览器**不发**这个头（2026-10-02 核对真实捕获：7 个 `x-*` 里没有它）。
-    // 保留是为了不改变既有行为；想更贴近浏览器，删掉下面这行即可。
-    'x-app-version': FALLBACK_CLIENT_VERSION,
   }
   for (const [key, value] of Object.entries(defaults)) {
     if (!headers[key]) headers[key] = value
@@ -92,9 +89,36 @@ export function buildDsHeaders(auth: WebAuth, referer?: string): DsHeaders {
   headers.origin = DS_BASE
   headers.referer = referer || `${DS_BASE}/`
   headers.authorization = `Bearer ${auth.token}`
-  headers['x-deepseek-harness'] = 'deepseek-harness (+https://github.com/deepseek-ai/deepseek-harness); provider=deepseek-web'
+  // 🔴🔴 **绝不加任何"自报家门"的头**（2026-10-14 删掉了两个）。
+  //
+  // 这里原本发 `x-deepseek-harness: deepseek-harness (+https://github.com/deepseek-ai/deepseek-harness);
+  // provider=deepseek-web`，以及一个真实浏览器根本不发的 `x-app-version`。
+  // 前者是**本仓库自己造的**，不是任何规范的一部分 —— 依据三条：
+  //   ① harness 的强制归属决策（`.agents/notes/...2026-06-21-mandatory-app-attribution-headers.md`）
+  //      明确：归属**只用标准 `User-Agent`**，并写明"不要按类比复用别的头"；
+  //   ② DeepSeek 专属那条决策（`2026-08-11-deepseek-request-user-id-header.md`）只拥有
+  //      `x-deepseek-harness-user-id` / `x-deepseek-harness-session-id`（以及 compaction 的 `-compact`）；
+  //   ③ 全 `_ref/` 搜 `x-deepseek-harness`：官方适配器从没发过这个**裸头**。
+  //
+  // 更关键的是**风险**：本插件的全部意义是"和官方网页端不可区分"，而这个头是
+  // **每个请求都带、且只有插件会带**的确定性标记 —— 服务端一行 `if` 就能把两条流量分开。
+  // 姊妹项目 `dsh-webin` 的 README 把它列为**最高风险单点**（原话："伪造的 `x-deepseek-harness` 头"）。
+  //
+  // ⚠️ 将来若有人想"为了合规把归属头加回来"：请**不要**加在这里。
+  // 本 provider 对上的归属就是浏览器 UA 本身（`auth.userAgent`，上面那行），
+  // 那是这个插件存在的理由；往里塞自定义头等于自证非浏览器。
+  // 由 `tests/check-request-headers.mjs` 守着（断言"发出去的头集合 == 真实浏览器的集合"）。
   // 这两个头由本插件按次生成/捕获，绝不复用快照里的旧值
   delete headers['x-ds-pow-response']
+  // 🔴 任何 `x-deepseek-harness*` 一律不许出去。
+  // 用**前缀清扫**而不是删一个具体名字：这个家族（裸头、`-user-id`、`-session-id`、`-compact`）
+  // 是发给官方 API 端点的身份头，真实网页端一个都不发 —— 只要漏一个就是自报家门。
+  // ⚠️ 将来若有人"为了合规把归属头加回来"：不要加在这里。本 provider 的归属就是浏览器 UA
+  // 本身（上面那行），那是这个插件存在的理由。判据见 `tests/check-request-headers.mjs`
+  // 的「头集合 == 真实浏览器的集合」。
+  for (const key of Object.keys(headers)) {
+    if (/^x-deepseek-harness/i.test(key)) delete headers[key]
+  }
   if (auth.cookie) headers.cookie = auth.cookie
   else delete headers.cookie
   if (auth.hifDliq) headers['x-hif-dliq'] = auth.hifDliq
