@@ -27,6 +27,7 @@ import {
   runPageSessionInstall,
   type PageSessionSlot,
 } from './page-session.ts'
+import type { PageObservation } from './transport-heartbeat.ts'
 
 /** 暴露给测试/诊断：找系统浏览器。 */
 export const findSystemBrowser = findSystemBrowserImpl
@@ -569,10 +570,68 @@ export async function launchBrowserTransport(): Promise<BrowserTransportSession>
   return activeSession
 }
 
-export async function shutdownBrowserTransport(): Promise<void> {
+/** 会话失效：收掉它，下一次请求会重新拉起（关停与"坏掉了"走同一条路，避免两份实现）。 */
+export function invalidateTransportSession(): void {
   activeSession?.cleanup()
   activeSession = undefined
   launchPromise = undefined
+}
+
+export async function shutdownBrowserTransport(): Promise<void> {
+  invalidateTransportSession()
+}
+
+/**
+ * 探针：读传输层页面此刻的**本地**状态（`location` / `readyState` / `localStorage.userToken`）。
+ *
+ * 🔴 只走本机 CDP，**不发任何网络请求** —— 保活心跳绝不能自己造出"对站点的固定周期流量"。
+ * 没有会话、或探测失败，一律返回 `null`（调用方按"不可用"处理）。
+ */
+export async function readTransportPageState(): Promise<PageObservation | null> {
+  const session = activeSession
+  if (!session) return null
+  try {
+    const result: any = await session.cdp.send('Runtime.evaluate', {
+      expression:
+        'JSON.stringify((function(){try{' +
+        "var raw=localStorage.getItem('userToken');" +
+        'var t=raw;' +
+        "try{var p=JSON.parse(raw);if(p&&typeof p==='object')t=p.value;}catch(e){}" +
+        'return {url:location.href,readyState:document.readyState,' +
+        "userToken:(t===null||t===undefined)?'':String(t)};" +
+        "}catch(e){return {url:location.href,readyState:'',userToken:''};}})())",
+      returnByValue: true,
+    })
+    const parsed = JSON.parse(result?.result?.value ?? 'null')
+    if (!parsed || typeof parsed !== 'object') return null
+    return {
+      url: String(parsed.url ?? ''),
+      readyState: String(parsed.readyState ?? ''),
+      userToken: String(parsed.userToken ?? ''),
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 页面未登录时用：把登录态槽的**签名作废**，让下一次请求按既有流程重装。
+ *
+ * 为什么不在心跳里直接重装：重装需要凭据，而凭据来自"那一次请求自己"
+ * （`pageSessionFromHeaders(rawHeaders)`）。心跳里再去取账号等于多开一条凭据通路，
+ * 还得处理"取到的是哪个号"。作废签名最省、也最不容易写错。
+ */
+export function markTransportPageSessionStale(): void {
+  const session = activeSession
+  if (!session) return
+  session.pageSession.signature = undefined
+}
+
+/** 页面被导航走时用：把页面带回站点 origin（本地动作，不发业务请求）。 */
+export async function navigateTransportToSite(): Promise<boolean> {
+  const session = activeSession
+  if (!session) return false
+  return ensureSiteOrigin(session.cdp).catch(() => false)
 }
 
 /** 页面上下文里的辅助函数名（把 base64 还原成字节）。 */

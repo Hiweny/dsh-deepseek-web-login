@@ -2943,6 +2943,28 @@ function Panel(): any {
         if (info.viaBrowserProxy) parts.push('通过系统 Edge/Chrome 进程代理')
         else parts.push('cipher 列表哈希与 Chrome 一致、ALPN 走 h2')
       }
+      /**
+       * 保活心跳：只说"那个页面还活着吗、还登着吗"。
+       * 探测走本机 CDP 读页面本地值，**不发任何网络请求** —— 所以有它不等于有流量。
+       */
+      const hb = info.heartbeat as
+        | { state?: string; at?: number; recoveries?: number; lastReason?: string }
+        | null
+        | undefined
+      if (hb && hb.state && hb.state !== 'idle') {
+        const label =
+          hb.state === 'alive'
+            ? '保活中'
+            : hb.state === 'logged-out'
+              ? '页面未登录（下次请求会重装）'
+              : hb.state === 'off-origin'
+                ? '页面被导航走（已尝试带回）'
+                : hb.state === 'dead'
+                  ? '探测不到页面（下次请求会重建）'
+                  : hb.state
+        const ago = Number.isFinite(hb.at) && hb.at ? Math.max(0, Math.round((Date.now() - hb.at) / 1000)) : null
+        parts.push(`保活心跳：${label}` + (ago === null ? '' : ` · ${ago}s 前`))
+      }
       transportHint.textContent = parts.join(' · ')
       transportProxyHint.textContent = String(info.hint ?? '')
     }

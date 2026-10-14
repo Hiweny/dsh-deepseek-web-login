@@ -28,9 +28,18 @@ import { join } from 'node:path'
 import { resolveDshHome } from './auth.ts'
 import {
   createBrowserFetch,
+  invalidateTransportSession,
+  markTransportPageSessionStale,
+  navigateTransportToSite,
+  readTransportPageState,
   shutdownBrowserTransport,
   systemBrowserAvailable,
 } from './browser-transport.ts'
+import {
+  createTransportHeartbeat,
+  type HeartbeatSnapshot,
+  type TransportHeartbeat,
+} from './transport-heartbeat.ts'
 import { setFetchImpl } from './webapi.ts'
 
 export type TransportKind = 'chromium' | 'node'
@@ -146,6 +155,40 @@ let currentEffectiveKind: 'node' | 'electron' | 'browser' = 'node'
 
 export { shutdownBrowserTransport } from './browser-transport.ts'
 
+/**
+ * 传输层保活心跳（单例）。
+ *
+ * 起表时机：**第一次真正用过浏览器传输层之后**（那时会话一定已经存在）。
+ * 绝不在 `applyTransportState` 里就起表 —— 那时浏览器还没拉起，探测必然读不到页面，
+ * 会被判成"死了"从而把正在启动/即将启动的会话标记失效。
+ */
+let transportHeartbeat: TransportHeartbeat | undefined
+
+export function transportHeartbeatSnapshot(): HeartbeatSnapshot | undefined {
+  return transportHeartbeat?.snapshot()
+}
+
+/** 传输层被用过一次 ⇒ 起表（幂等）。 */
+export function noteTransportUsed(): void {
+  if (!transportHeartbeat) {
+    transportHeartbeat = createTransportHeartbeat({
+      probe: readTransportPageState,
+      // 未登录 ⇒ 作废签名，下一次请求按既有流程把登录态重装进页面（凭据来自那次请求）
+      onLoggedOut: markTransportPageSessionStale,
+      // 被导航走 ⇒ 带回站点 origin（本地动作）
+      onOffOrigin: navigateTransportToSite,
+      // 页面/浏览器不可用 ⇒ 收掉会话，下一次请求重新拉起
+      onDead: invalidateTransportSession,
+    })
+  }
+  transportHeartbeat.noteTransportUsed()
+}
+
+/** 传输层关停时一并停表（否则会对着一个不存在的会话空转）。 */
+export function stopTransportHeartbeat(): void {
+  transportHeartbeat?.stop()
+}
+
 /** 当前实际生效的 fetch 实现与它是哪一种 Chrome/Node 网络栈。 */
 export function currentEffectiveFetch(): {
   fetch: typeof fetch
@@ -164,12 +207,23 @@ export function currentEffectiveFetch(): {
 /** 把状态落到 webapi 的注入层（`undefined` 即还原为 Node 全局 fetch）。 */
 export function applyTransportState(state: TransportState): void {
   if (state.effective === 'chromium' && state.viaBrowserProxy) {
-    appliedBrowserFetch = createBrowserFetch()
+    const rawBrowserFetch = createBrowserFetch()
+    /**
+     * 包一层只为一件事：**用完一次之后开始保活**。
+     * （不在建 fetch 时起表 —— 那时会话还不存在，探测必然读不到页面。）
+     */
+    appliedBrowserFetch = (async (...args: any[]) => {
+      const response = await (rawBrowserFetch as any)(...args)
+      noteTransportUsed()
+      return response
+    }) as typeof fetch
     setFetchImpl(appliedBrowserFetch)
     currentEffectiveKind = 'browser'
     return
   }
   if (appliedBrowserFetch) {
+    // 离开浏览器代理：保活也要停，否则会对着一个已经不存在的会话空转
+    stopTransportHeartbeat()
     void shutdownBrowserTransport()
     appliedBrowserFetch = undefined
   }

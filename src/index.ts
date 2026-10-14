@@ -119,6 +119,7 @@ import {
   TRANSPORT_HINT,
   type TransportKind,
   shutdownBrowserTransport,
+  transportHeartbeatSnapshot,
 } from './transport.ts'
 import {
   applyContextMode,
@@ -1441,7 +1442,12 @@ export function apply(ctx: any, config: Config = {}): void {
 
             // 传输层：网页端请求从哪个网络栈出去（Chromium / Node）。见 transport.ts。
             if (req.method === 'GET' && route === '/transport') {
-              sendJson(res, 200, { ...transportState, hint: TRANSPORT_HINT, settingsPath: transportSettingsPath() })
+              sendJson(res, 200, {
+                ...transportState,
+                heartbeat: transportHeartbeatSnapshot() ?? null,
+                hint: TRANSPORT_HINT,
+                settingsPath: transportSettingsPath(),
+              })
               return
             }
             if (req.method === 'POST' && route === '/transport') {
@@ -1471,6 +1477,7 @@ export function apply(ctx: any, config: Config = {}): void {
                 ok: true,
                 ...transportState,
                 persisted,
+                heartbeat: transportHeartbeatSnapshot() ?? null,
                 hint: TRANSPORT_HINT,
                 settingsPath: transportSettingsPath(),
               })
@@ -1627,6 +1634,8 @@ export function apply(ctx: any, config: Config = {}): void {
                   sessionCleanup: cleanupMode,
                   sessionCleanupPending: sessionCleaner.pendingCount(),
                   transport: transportState.effective,
+                  // 传输层保活心跳：面板/排查用（探测只走本地 CDP，不发网络请求）
+                  transportHeartbeat: transportHeartbeatSnapshot() ?? null,
                   contextMode,
                   contextChain: contextChainInfo() ?? null,
                   version: pluginVersion(),

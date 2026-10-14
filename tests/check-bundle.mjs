@@ -1258,6 +1258,23 @@ const checks = {
 
   '产物里保留着 x-deepseek-harness* 的前缀清扫（快照混进来也发不出去）':
     /\^x-deepseek-harness/.test(host),
+
+  /**
+   * 传输层保活心跳：**光有源码不算** —— 构建没跟上，发出去的包里就没有它。
+   *
+   * 判据用**函数名**（已核实产物保留标识符：`readTransportPageState` / `judgeObservation` /
+   * `pickIntervalMs` / `noteTransportUsed` 都在），不绑文案 —— 文案改一个字不该变红。
+   * ⚠️ 必须用**词边界**：`includes('noteTransportUsed')` 会被 `noteTransportUsedX`
+   * 命中（第一次写就是这么写的，变异验证时**没变红**才发现）。
+   * 面板那半边单独断言 `client` 会读 `.heartbeat`：只在 host 侧加，用户在界面上看不到状态。
+   */
+  '产物里带着传输层保活心跳（探针/判定/抖动/单例，且面板会显示）':
+    /\breadTransportPageState\b/.test(host) &&
+    /\bjudgeObservation\b/.test(host) &&
+    /\bpickIntervalMs\b/.test(host) &&
+    /\bnoteTransportUsed\b/.test(host) &&
+    /\btransportHeartbeatSnapshot\b/.test(host) &&
+    /\.heartbeat\b/.test(client),
 }
 
 let failed = 0
