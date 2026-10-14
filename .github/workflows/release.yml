@@ -112,7 +112,10 @@ jobs:
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG 已存在，改为覆盖上传 tgz（重跑安全）"
+            echo "Release $TAG 已存在，刷新说明并覆盖 tgz（重跑安全）"
+            # ⚠️ 只 upload --clobber 的话，说明会一直停在第一次建 Release 时的那份
+            #   （同版本重打 tag 追加改动时就会"页面说明与 CHANGELOG 不一致"）。
+            gh release edit "$TAG" --notes-file notes.md
             gh release upload "$TAG" ./*.tgz --clobber
           else
             gh release create "$TAG" ./*.tgz \
