@@ -1,0 +1,353 @@
+{
+  "total_count": 3,
+  "jobs": [
+    {
+      "id": 114831168816,
+      "run_id": 38255146941,
+      "workflow_name": "CI",
+      "head_branch": "main",
+      "run_url": "https://api.github.com/repos/cv-superding/dsh-deepseek-web-login/actions/runs/38255146941",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOUU_CrM8AAAAavHiVMA",
+      "head_sha": "f693ddf24585753ac6a4a21cb43fb1742a52dfa1",
+      "url": "https://api.github.com/repos/cv-superding/dsh-deepseek-web-login/actions/jobs/114831168816",
+      "html_url": "https://github.com/cv-superding/dsh-deepseek-web-login/actions/runs/38255146941/job/114831168816",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-12T13:21:42Z",
+      "started_at": "2026-10-12T13:21:49Z",
+      "completed_at": "2026-10-12T13:23:04Z",
+      "name": "test (macos-latest)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-12T13:21:50Z",
+          "completed_at": "2026-10-12T13:21:51Z"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-12T13:21:51Z",
+          "completed_at": "2026-10-12T13:21:53Z"
+        },
+        {
+          "name": "Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-12T13:21:53Z",
+          "completed_at": "2026-10-12T13:22:02Z"
+        },
+        {
+          "name": "安装依赖",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-12T13:22:02Z",
+          "completed_at": "2026-10-12T13:22:04Z"
+        },
+        {
+          "name": "构建（host + client，不依赖 Bash）",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-12T13:22:04Z",
+          "completed_at": "2026-10-12T13:22:05Z"
+        },
+        {
+          "name": "类型检查（tsc --noEmit）",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-12T13:22:05Z",
+          "completed_at": "2026-10-12T13:22:08Z"
+        },
+        {
+          "name": "全量离线用例",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-10-12T13:22:08Z",
+          "completed_at": "2026-10-12T13:22:56Z"
+        },
+        {
+          "name": "产物核对",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-10-12T13:22:56Z",
+          "completed_at": "2026-10-12T13:22:56Z"
+        },
+        {
+          "name": "Post Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15,
+          "started_at": "2026-10-12T13:22:56Z",
+          "completed_at": "2026-10-12T13:22:59Z"
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16,
+          "started_at": "2026-10-12T13:22:59Z",
+          "completed_at": "2026-10-12T13:23:00Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 17,
+          "started_at": "2026-10-12T13:23:00Z",
+          "completed_at": "2026-10-12T13:23:01Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/cv-superding/dsh-deepseek-web-login/check-runs/114831168816",
+      "labels": [
+        "macos-latest"
+      ],
+      "runner_id": 1000001093,
+      "runner_name": "GitHub Actions 1000001093",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 114831168883,
+      "run_id": 38255146941,
+      "workflow_name": "CI",
+      "head_branch": "main",
+      "run_url": "https://api.github.com/repos/cv-superding/dsh-deepseek-web-login/actions/runs/38255146941",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOUU_CrM8AAAAavHiVcw",
+      "head_sha": "f693ddf24585753ac6a4a21cb43fb1742a52dfa1",
+      "url": "https://api.github.com/repos/cv-superding/dsh-deepseek-web-login/actions/jobs/114831168883",
+      "html_url": "https://github.com/cv-superding/dsh-deepseek-web-login/actions/runs/38255146941/job/114831168883",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-12T13:21:42Z",
+      "started_at": "2026-10-12T13:21:44Z",
+      "completed_at": "2026-10-12T13:23:05Z",
+      "name": "test (windows-latest)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-12T13:21:45Z",
+          "completed_at": "2026-10-12T13:21:46Z"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-12T13:21:46Z",
+          "completed_at": "2026-10-12T13:21:53Z"
+        },
+        {
+          "name": "Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-12T13:21:53Z",
+          "completed_at": "2026-10-12T13:21:59Z"
+        },
+        {
+          "name": "安装依赖",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-12T13:21:59Z",
+          "completed_at": "2026-10-12T13:22:04Z"
+        },
+        {
+          "name": "构建（host + client，不依赖 Bash）",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-12T13:22:04Z",
+          "completed_at": "2026-10-12T13:22:06Z"
+        },
+        {
+          "name": "类型检查（tsc --noEmit）",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-12T13:22:06Z",
+          "completed_at": "2026-10-12T13:22:10Z"
+        },
+        {
+          "name": "全量离线用例",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-10-12T13:22:10Z",
+          "completed_at": "2026-10-12T13:23:00Z"
+        },
+        {
+          "name": "产物核对",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-10-12T13:23:00Z",
+          "completed_at": "2026-10-12T13:23:01Z"
+        },
+        {
+          "name": "Post Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15,
+          "started_at": "2026-10-12T13:23:01Z",
+          "completed_at": "2026-10-12T13:23:02Z"
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16,
+          "started_at": "2026-10-12T13:23:02Z",
+          "completed_at": "2026-10-12T13:23:04Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 17,
+          "started_at": "2026-10-12T13:23:04Z",
+          "completed_at": "2026-10-12T13:23:04Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/cv-superding/dsh-deepseek-web-login/check-runs/114831168883",
+      "labels": [
+        "windows-latest"
+      ],
+      "runner_id": 1000001091,
+      "runner_name": "GitHub Actions 1000001091",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 114831169005,
+      "run_id": 38255146941,
+      "workflow_name": "CI",
+      "head_branch": "main",
+      "run_url": "https://api.github.com/repos/cv-superding/dsh-deepseek-web-login/actions/runs/38255146941",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOUU_CrM8AAAAavHiV7Q",
+      "head_sha": "f693ddf24585753ac6a4a21cb43fb1742a52dfa1",
+      "url": "https://api.github.com/repos/cv-superding/dsh-deepseek-web-login/actions/jobs/114831169005",
+      "html_url": "https://github.com/cv-superding/dsh-deepseek-web-login/actions/runs/38255146941/job/114831169005",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-12T13:21:42Z",
+      "started_at": "2026-10-12T13:21:44Z",
+      "completed_at": "2026-10-12T13:22:47Z",
+      "name": "test (ubuntu-latest)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-12T13:21:45Z",
+          "completed_at": "2026-10-12T13:21:46Z"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-12T13:21:46Z",
+          "completed_at": "2026-10-12T13:21:47Z"
+        },
+        {
+          "name": "Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-12T13:21:47Z",
+          "completed_at": "2026-10-12T13:21:48Z"
+        },
+        {
+          "name": "安装依赖",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-12T13:21:49Z",
+          "completed_at": "2026-10-12T13:21:51Z"
+        },
+        {
+          "name": "构建（host + client，不依赖 Bash）",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-12T13:21:51Z",
+          "completed_at": "2026-10-12T13:21:52Z"
+        },
+        {
+          "name": "类型检查（tsc --noEmit）",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-12T13:21:52Z",
+          "completed_at": "2026-10-12T13:21:54Z"
+        },
+        {
+          "name": "全量离线用例",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-10-12T13:21:54Z",
+          "completed_at": "2026-10-12T13:22:43Z"
+        },
+        {
+          "name": "产物核对",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-10-12T13:22:43Z",
+          "completed_at": "2026-10-12T13:22:43Z"
+        },
+        {
+          "name": "Post Run actions/setup-node@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15,
+          "started_at": "2026-10-12T13:22:43Z",
+          "completed_at": "2026-10-12T13:22:45Z"
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16,
+          "started_at": "2026-10-12T13:22:45Z",
+          "completed_at": "2026-10-12T13:22:45Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 17,
+          "started_at": "2026-10-12T13:22:45Z",
+          "completed_at": "2026-10-12T13:22:45Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/cv-superding/dsh-deepseek-web-login/check-runs/114831169005",
+      "labels": [
+        "ubuntu-latest"
+      ],
+      "runner_id": 1000001092,
+      "runner_name": "GitHub Actions 1000001092",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    }
+  ]
+}

@@ -74,13 +74,27 @@ jobs:
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           VERSION="${TAG#v}"
-          if npm view "dsh-deepseek-web-login@$VERSION" version >/dev/null 2>&1; then
+          # 🔴 判"在不在 npm 上"的逻辑在 scripts/npm-release.mjs 里（那边有用例守）。
+          #   别退回 `if npm view "<pkg>@$VERSION" version >/dev/null 2>&1; then 跳过`：
+          #   那样是拿**退出码**当判据，而它对"版本不存在"并不保证非零
+          #   （npm 10 冷缓存给 1、热缓存给 0；npm 11 给 1）。
+          #   0.9.2 就是这样静默漏发的：跳过发布、Release 照建、步骤还报 success。
+          DECISION="$(node scripts/npm-release.mjs should-publish "$VERSION")"
+          echo "npm 发布决策：$DECISION"
+          if [ "$DECISION" = "SKIP" ]; then
             echo "npm 上已有 $VERSION，跳过发布（重跑安全）"
             exit 0
           fi
           # 不加 --provenance：OIDC + 公共仓库会自动生成 provenance 证明，无需手动开。
           # 不加 NODE_AUTH_TOKEN：npm CLI 自动检测 OIDC 环境。
           npm publish --access public
+
+      # 🔴 发完必须自己核实：0.9.2 的教训是"步骤 success ≠ 真的发出去了"。
+      #    这一步非零就直接断在这里 ⇒ 不会再有「Release 有、npm 没有」的错位。
+      - name: 核验 npm 上确实有这一版
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: node scripts/npm-release.mjs verify "${TAG#v}"
 
       - name: 打包
         run: npm pack

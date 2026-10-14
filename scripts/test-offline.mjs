@@ -59,7 +59,15 @@ for (const file of files) {
   })
   if (result.error || result.status !== 0) {
     failed.push(file)
-    console.error(`FAIL ${file}${result.error ? `：${result.error.message}` : ''}`)
+    const why = result.error ? result.error.message : `退出码 ${result.status}`
+    console.error(`FAIL ${file}：${why}`)
+    /**
+     * 🔴 让"CI 红"自带病因。GitHub 把 `::error::` 记成 annotation，
+     * 于是**不用下载日志**（无 token 时那是 403）也能从界面/API 看到是哪个文件红的。
+     * 2026-10-14 实测：win/mac 两个 runner 报红、ubuntu 绿，而日志拿不到 ——
+     * 没有这一行就只能整轮整轮地猜是哪个用例。
+     */
+    console.error(`::error::离线用例失败：${file}（${why}）`)
   }
 }
 

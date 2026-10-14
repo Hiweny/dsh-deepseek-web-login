@@ -74,6 +74,37 @@ x-deepseek-harness: deepseek-harness (+https://github.com/deepseek-ai/deepseek-h
 本产物不保留注释（源码里解释这个头的那段长注释一个字都没进 `lib/index.js`）。
 两条都做了变异验证（改 src → 重建 → 变红 → 还原）。
 
+### 发版：npm 漏发（推 tag 后 npm 上没有这一版）
+
+推 `v0.9.2` 后 GitHub Release 建出来了（带 tgz），**npm 上却没有 0.9.2** ——
+而工作流里"发布到 npm"那一步报的是 `success`。
+
+根因在旧判据：
+
+```sh
+if npm view "dsh-deepseek-web-login@$VERSION" version >/dev/null 2>&1; then
+  echo "npm 上已有 $VERSION，跳过发布"; exit 0   # ← 走了这里
+fi
+```
+
+它拿**退出码**当"是否已发布"。而 `npm view <pkg>@<不存在的版本> version` 的退出码
+**不保证非零**：本机实测 npm 10 冷缓存给 1、**热缓存给 0**；npm 11 给 1。
+于是"版本不存在"被读成"已发布" ⇒ 静默跳过 `npm publish`，Release 照建
+（正是文件开头那句注释担心的错位，只是方向反了）。
+
+修法：
+
+1. 判据改成看**输出里有没有版本号**，并把这段逻辑抽到 `scripts/npm-release.mjs`
+   （`should-publish` / `verify`），用 `tests/check-npm-release.mjs` 8 条用例守着 ——
+   含它就是事故本身的回归用例（"空输出 ⇒ 必须 PUBLISH"）；两条变异验证均变红。
+2. **发完加一步强制核验**（`npm-release.mjs verify`，registry 传播重试 6 次）：
+   核验不过就直接失败 ⇒ 不会再出现「Release 有、npm 没有」。
+   同时顺序被用例钉住：`npm publish` → `verify` → `gh release create`。
+3. 顺手清理：版本号进 shell 前按规范形态校验（拒绝 `0.9.2; rm -rf /` 这类 tag 形态）。
+4. `scripts/test-offline.mjs` 失败时输出 `::error::离线用例失败：<文件>` ——
+   GitHub 会把它记成 annotation，于是**没有 token 也能看到是哪个用例红的**
+   （日志下载在无 token 时是 403，这次排查就卡在这里）。
+
 ### ⚠️ 还没做 / 仍不确定
 
 - **没有加回任何归属头**，这是刻意的：本 provider 的归属就是浏览器 UA 本身
