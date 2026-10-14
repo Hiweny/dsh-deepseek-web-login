@@ -2,6 +2,172 @@
 
 本项目大致遵循语义化版本；日期为本地时间。
 
+## 0.9.1 — 2026-10-14
+
+**让传输层更像真浏览器：站对 origin + cookie 真的发出去 + 页面自己知道已登录。**
+
+起因是用户看了自己的另一个项目 [cv-superding/dsh-webin](https://github.com/cv-superding/dsh-webin)，
+建议"直接内置一个浏览器、指纹跟浏览器一致"。查证后的结论是：**方向对，但病灶不是"用了外部浏览器"** ——
+传输层本来就在真实 Chromium 的页面上下文里发请求（CDP `Runtime.evaluate` 跑 `fetch`）。
+真正的差距是三条，这次全部修掉。前两条已实测；第三条的**页面内投递**已实测，
+**站点侧心跳**要重启 DSH 后在真实对话里观察（见文末"诚实缺口"）。
+
+### 修 1：传输层页面停在 `about:blank`
+
+启动参数原本是 `buildBrowserArgs(PROFILE_DIR, 'about:blank')`，于是每个请求都是
+"从 `about:blank` 发出、打到 chat.deepseek.com 的跨源请求"：
+
+- `Origin` 不是站点 origin —— 而 **`Origin` 是 Fetch 规范的禁止头名，脚本补不了**，
+  **唯一**正确的做法就是让页面真的站在那个 origin 上；
+- `Referer` 缺失；`Sec-Fetch-Site` 是 `cross-site` 而不是同源的 `same-origin`。
+
+现在启动 URL 就是站点（新增 `transportBrowserArgs()` 纯函数，便于用例直接断言参数），
+并在 CDP 连上后由 `ensureSiteOrigin()` 轮询 `location.origin` 兜底。
+⚠️ 用**轮询**而不是监听 `Page.loadEventFired`：CDP 事件不重放，监听有竞态。
+超时**不抛错**（退回旧行为也比传输层起不来强），只 warn。
+
+### 修 2：cookie 一直是**被浏览器静默丢弃**的
+
+`webapi.ts` 把 cookie 放进 `headers.cookie`，而传输层把 headers 原样交给页面里的 `fetch`。
+`Cookie` 是**禁止头名** —— 浏览器**不报错、直接丢掉**。所以：
+
+- 走浏览器传输层（0.7.0 起的默认路径）⇒ **一条 cookie 都没发出去过**，全靠 `Authorization`；
+- 走 undici 回退路径（Node，不受禁止头约束）⇒ cookie 正常。
+
+**同一份代码两条路径行为不一致，而且完全静默**，直到这次才被发现。
+
+现在 cookie 改走 CDP `Network.setCookie`：不受禁止头约束，而且**能写 httpOnly**
+（真正决定登录态的那几个往往就是 httpOnly，页面 JS 自己也写不了）。
+`splitBrowserFetchHeaders()` 把禁止头剥离并单独带出 cookie；
+`installCookiesViaCdp()` 按**请求自己的 origin** 安装，并且**检查 `success` 返回值** ——
+`Network.setCookie` 失败时返回 `{success:false}` 而不抛错，不看返回值等于又造一个静默失败。
+装了 0 条但本来有 cookie 时会 `warn`。
+
+页面 `fetch` 另加 `credentials: 'include'`（生产同源本来就会带，显式写是防止将来
+"页面 origin 变了"这类改动悄悄把 cookie 弄丢）。
+
+### 修 3：传输层页面**自己不知道已登录**（站点心跳起不来的根因）
+
+前两条修完，"页面站在站点 origin 上、cookie 也真的发出去了"——
+但页面**自己**仍是未登录状态：我们只装了 cookie，而**网页端的登录态读的是
+`localStorage.userToken`**（AppKit 包装 `{"value":…,"__version":"0"}`）。
+于是出现一个真人身上不可能出现的组合：
+
+- 页面站在 `chat.deepseek.com` 上，站点 JS 判定未登录、渲染登录页；
+- 而我们发出的请求带着合法的 `Authorization: Bearer …`。
+
+后果是**站点自己的 JS 从来没跑起来过** —— 没有会话列表轮询、没有长连接、
+没有任何由页面自发产生的活动。它只是一个"只等我们下命令"的空壳页。
+**这就是"像人一样的心跳"缺失的真正原因，而不是缺一个定时 ping。**
+
+修法（新增 `src/page-session.ts`）：
+
+1. 从**本次请求真实的头**里抽出可写回页面的值：`userToken` ← `Authorization`（剥 `Bearer `、
+   按网页端格式包一层）、`hif_leim_cached` ← `x-hif-leim`；
+2. 用 CDP `Runtime.evaluate` 写进页面 localStorage，**并读回来核对** ——
+   写进去不等于生效（被静默丢弃时会 `written` 有它、`verified` 为 `null`），
+   Node 侧按原值比对出 `mismatched` 并 `warn`；
+3. **重载页面**让站点 JS 重新读 `userToken` ⇒ 站点应用真的跑起来，心跳由**站点自己**产生。
+
+三个刻意的取舍：
+
+- **不自己造定时 ping。** 固定周期本身就是一种可被识别的模式；让真实的页面活动去产生心跳
+  才是正解。所以这边一行 `setInterval` 都没有。
+- 🔴 **只写有来源的键。** `__appKit_userInfo` / `hif_dliq` 在请求头里没有对应来源
+  （`hifDliq` 只以头的形态存在，全仓 `localStorage.*Item` 只出现 `userToken` /
+  `__appKit_userInfo` / `hif_leim_cached` 三个键）⇒ **不编造**。
+  猜错的形态会让站点 JS 走到没验证过的分支，比不写更危险。
+- 🔴 **用签名而不是 boolean 记住"装过没有"。** 多账号换号后页面还停在旧账号的登录态上，
+  就成了"页面是 A、请求带 B" —— 比不装更假。签名变了（`JSON.stringify(writes)`）就重装一次。
+
+另外补了一个不能假定的点：**重载会换掉文档，`Runtime.addBinding` 注册的绑定不一定还在**
+（取决于 Chrome 版本）。所以重载后 `reinstallPageBindings()` 会重装并**问一次 `typeof`** 验证；
+不做这一步的话，绑定丢了会让页面脚本以 `__dsh…Callback is not defined` 抛错，
+调用方只看到"请求莫名其妙失败"，极难归因。
+
+### 顺手修掉一个**自己引入**的缺陷（跑批抓到，不是想出来的）
+
+第一版是在调用点"**尝试前先置位**"安装签名。跑批时这条新用例红了，日志给出真因：
+
+```
+[deepseek-web] 传输层页面没能停在 https://chat.deepseek.com 的 origin 上……
+[deepseek-web] 登录态一条都没写进传输层页面……
+```
+
+`ensureSiteOrigin()` 是**偶发**失败的（既有路径、只 warn），而页面没停在站点 origin 时
+`localStorage` 是 opaque origin、一条都写不进去。于是"尝试前先置位"让**一次瞬时失败
+变成这条浏览器会话永远不再重试** —— 又是一次静默失败。
+
+修法是把整条流程抽成 `runPageSessionInstall(slot, writes, effects)`：**签名只在装成功后写入**，
+`installing` 单独挡并发。抽出来的好处是这条语义**可以被测**（见下）——
+否则它只是一段写在调用点里、没人守的 if 条件，下次照样会被写回去。
+
+### 测试
+
+`tests/check-browser-transport.mjs` 加了 2 条（共 14 条），新增 `tests/check-page-session.mjs`（24 条）：
+
+- **★ 行为级**：真启一次传输层、真发一次请求，然后**去页面里读 `localStorage`**，
+  断言 `userToken` 解包后等于请求头里那个 token、`readyState` 已重载完成、
+  且 `location.origin` 就是站点 origin（否则 localStorage 是 opaque origin，装了也没意义）。
+  这条同时把"调用点被删"也守住了 —— 删掉调用它就红，不需要去扫源码位置。
+  ⚠️ 探针**必须异常安全**（包 try/catch 再返回 JSON）：页面不在站点 origin 时
+  `localStorage` 访问会抛 ⇒ evaluate 只回 `exceptionDetails`、没有 `value` ⇒
+  断言会退化成"读不到状态"这种没法归因的失败（第一版就是这样，跑批真踩到）。
+- 接线守卫补两条：`installPageSessionViaCdp(` / `reinstallPageBindings(` 必须在
+  `createBrowserFetch` 体内（剥掉注释再匹配）。
+- `check-page-session.mjs` 以**真求值**为主：那段页面脚本用假 `localStorage`
+  真跑一遍，断言它写进去的键与值、单键失败隔离、以及"写进去但读不到"能被 `mismatched` 抓出来。
+  🔴 只断"字符串里有 xxx"的写法在改坏形态后照样会绿。
+- **★ 流程组（6 条）**：`runPageSessionInstall` 用假副作用跑真的那条流程 ——
+  「装失败 ⇒ 不记签名 ⇒ 下一次仍然重试」「装成功后幂等，不重复安装/重载」「换号重装」
+  「绑定没建起来必须 warn」「抛错不报成功且槽位清干净」「无值可写则零副作用」。
+  这一组就是上面那个缺陷的**真守卫**。
+
+**变异验证**：`dev/mutate-page-session.mjs`（**7 处**判据逐个打坏 → 必须变红 → 还原），
+全部被抓住 —— 含"签名在尝试前就置位"这一处（正是那个缺陷本身）。
+传输层那 4 处此前的变异也都变红。
+
+⚠️ 变异脚本**刻意不 spawn 子进程**：本机 node→node `spawnSync` 稳定报 `EBUSY`
+（`status=null`、无输出），用它做变异验证会把"spawn 失败"误读成"用例变红"。
+改成**同一进程内**变异 → 用 specifier 上的 `?bust=` 破除 ESM 缓存重跑判据 → 还原。
+⚠️ 同样因此，`scripts/test-offline.mjs`（它用 spawnSync）**在本机会全假红** ⇒
+本机验证要走 bash 循环逐个跑（`for f in tests/check-*.mjs; do node "$f"; done`）。
+
+### 没有做、以及为什么
+
+**没有改成"内置 webview + 操作 UI"**（即 `dsh-webin` 那条路）。它确实能拿到最真实的指纹
+（请求由页面自己发，`x-hif-*`/PoW 都不需要回放），但代价是硬的，且都有源码证据：
+
+| 约束 | 依据 | 后果 |
+|---|---|---|
+| 注入不了 `preload` | harness `apps/desktop/src/browser-guests.ts` 会把 webPreferences 清空后只设固定几项 | 拦不到 `fetch`/XHR ⇒ 拿不到 SSE ⇒ 只能轮询 DOM |
+| guest partition 是**内存态** | 名字是 `dsh-sidebar-browser-${randomUUID()}`，无 `persist:` 前缀；而登录态主要是 **httpOnly cookie** | 默认**重启就要重新登录** |
+| desktop-only | 同一包另有 `IframeImpl` 给 web 端，跨域 iframe 读不了站点 | 只在 DSH 桌面端成立 |
+
+`dsh-webin` 为此写了约 **8900 行** client 半（含依赖站点真实类名的 DOM 读写）。
+换成那条路会退掉：SSE 真流式、服务端 token 统计、图片 `file/upload_file` 通道、
+跨重启的登录态。完整对照见 `_ref/webview-vs-transport-2026-10-14.md`。
+
+**⚠️ 但"内置浏览器"这个方向里真正有价值的那一半，这次用便宜得多的方式拿到了：**
+它不是"把浏览器嵌进 DSH 的 UI"，而是"让发起请求的那个页面**真的像一个已登录的标签页**"。
+修 3 做的正是这件事 —— 不需要 client 半、不需要 guest partition、不需要动 DSH 的 UI 宿主，
+代价只有一次页面重载。
+
+### 一处诚实的缺口
+
+**cookie 的端到端投递没有在用例里断言** —— 试过，做不到：传输层页面现在站在
+`https://chat.deepseek.com`，而夹具服务在 `http://localhost:PORT`，这是**跨站**请求，
+Chromium 默认的 `SameSite=Lax` 不会为跨站子资源附带 cookie；加 `sameSite=no_restriction`
+又强制要求 `secure`，于是 http 请求照样带不上。两头堵死 ——
+**这是夹具的局限，不是产品缺陷**：生产里页面与 API 同源，`SameSite=Lax` 照常发送。
+
+所以这条守的是"我们发出了什么 CDP 调用"（机制正确性）；
+**真机行为要靠重启后跑一轮真实对话验证**，在拿到那个结果之前不声称它已修好。
+
+修 3 的**页面内投递**是能端到端断言的（localStorage 与夹具服务无关，读的就是传输层页面本身），
+所以那条是行为级真断言。但**"站点自己的 JS 真的开始产生心跳"**这件事，
+只能靠重启后在真实对话里观察页面是否停在已登录状态 —— 同样，在拿到结果前不声称已修好。
+
 ## 0.9.0 — 2026-10-14
 
 **声明两项 DSH 路由能力，让投喂链不再因「工具集 / 系统提示词变化」而断。**

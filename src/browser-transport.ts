@@ -21,12 +21,111 @@ import {
   parseDevToolsActivePort,
   type BrowserCandidate,
 } from './browser-login.ts'
+import {
+  installPageSessionViaCdp,
+  pageSessionFromHeaders,
+  runPageSessionInstall,
+  type PageSessionSlot,
+} from './page-session.ts'
 
 /** 暴露给测试/诊断：找系统浏览器。 */
 export const findSystemBrowser = findSystemBrowserImpl
 
 const BINDING_NAME = '__dshBrowserTransportCallback'
 const PROFILE_DIR = join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'web-login', 'transport-profile')
+
+/**
+ * 传输层页面应该站在的 origin。**故意不 import `webapi.ts` 的 `DS_BASE`**：
+ * 依赖方向是 `webapi → browser-transport`，反向 import 会形成循环
+ * （`browser-login.ts` 里那种写法能跑，是因为只在函数内用；这里为了不给自己埋雷就本地定义）。
+ * ⚠️ 两者必须相等 —— 由 `tests/check-browser-transport.mjs` 的一条用例守着。
+ */
+export const TRANSPORT_SITE_ORIGIN = 'https://chat.deepseek.com'
+
+/**
+ * 🔴 **禁止头名 —— 在页面里 `fetch()` 时浏览器会静默忽略它们。**
+ *
+ * 这不是"我们发得不好"，是 Fetch 规范写死的：这些头由浏览器自己决定，
+ * 脚本设了也**不报错、直接丢**（`Cookie` / `Origin` / `Referer` / `Host` /
+ * `Content-Length` / `Connection` 都在名单里）。
+ *
+ * ## 为什么必须知道这件事（2026-10-14 发现）
+ *
+ * `webapi.ts` 把 cookie 塞进 `headers.cookie`，而传输层是把 headers **原样交给页面里的
+ * `fetch`** ⇒ 走浏览器传输层时 **cookie 一个都没发出去**，一直只靠 `Authorization`。
+ * 同一个插件在 undici 回退路径上是**能发 cookie 的**（那是 Node，不受禁止头约束）
+ * ⇒ 两条传输路径的行为不一致，而浏览器路径是 0.7.0 起的默认路径。
+ *
+ * 正确做法见 `cookiesForCdp()`：走 CDP 的 `Network.setCookie`（它不受禁止头约束，
+ * 而且**支持 httpOnly** —— 页面 JS 自己也写不了那几个真正决定登录态的 cookie）。
+ */
+const FORBIDDEN_PAGE_HEADERS = new Set([
+  'cookie', 'origin', 'referer', 'host', 'connection', 'content-length', 'transfer-encoding',
+])
+
+/** 一次页面内 fetch 的头：真正交给 `fetch()` 的 + 需要另行安装的 cookie。 */
+export interface PageFetchHeaders {
+  /** 剥掉禁止头之后、可以安全交给页面 `fetch()` 的那些。 */
+  headers: Record<string, string>
+  /** 被剥掉的头名（原样保留大小写），供诊断/日志用。 */
+  stripped: string[]
+  /** 原始 `cookie` 头的值（没有则为空串）。 */
+  cookieHeader: string
+}
+
+/**
+ * 把请求头拆成"页面能发的"与"必须另行安装的"。
+ *
+ * `Origin` / `Referer` **不在这里补** —— 它们同样是禁止头，唯一正确的做法是
+ * **让页面站在目标站点自己的 origin 上**（见 `ensureSiteOrigin()`）。
+ * 这也是 2026-10-14 之前最实在的一个"不像真浏览器"的点：
+ * 传输层启动在 `about:blank`，于是每个请求的 `Origin` 都不是站点的。
+ */
+export function splitBrowserFetchHeaders(input: Record<string, string>): PageFetchHeaders {
+  const headers: Record<string, string> = {}
+  const stripped: string[] = []
+  let cookieHeader = ''
+  for (const [key, value] of Object.entries(input)) {
+    const lower = key.toLowerCase()
+    if (!FORBIDDEN_PAGE_HEADERS.has(lower)) {
+      headers[key] = value
+      continue
+    }
+    stripped.push(key)
+    if (lower === 'cookie') cookieHeader = value
+  }
+  return { headers, stripped, cookieHeader }
+}
+
+/** 按 `;` 拆 cookie 头。**用第一个 `=` 切分**：值里可能含 `=`（base64 padding 很常见）。 */
+export function parseCookieHeader(cookieHeader: string): { name: string; value: string }[] {
+  const out: { name: string; value: string }[] = []
+  for (const part of String(cookieHeader ?? '').split(';')) {
+    const sep = part.indexOf('=')
+    if (sep < 0) continue
+    const name = part.slice(0, sep).trim()
+    const value = part.slice(sep + 1).trim()
+    if (!name) continue
+    out.push({ name, value })
+  }
+  return out
+}
+
+/**
+ * 转成 CDP `Network.setCookie` 的参数。用 `url` 而不是 `domain`：
+ * Chromium 会据此推导 domain/path/secure，少一处自己猜错的机会。
+ */
+export function cookiesForCdp(
+  cookieHeader: string,
+  url: string,
+): { name: string; value: string; url: string; path: string }[] {
+  return parseCookieHeader(cookieHeader).map((cookie) => ({
+    name: cookie.name,
+    value: cookie.value,
+    url,
+    path: '/',
+  }))
+}
 
 interface TransportRequestState {
   resolveHeaders: (status: number, statusText: string, headers: Record<string, string>) => void
@@ -40,6 +139,15 @@ interface BrowserTransportSession {
   child: ChildProcess
   cdp: CdpClient
   cleanup: () => void
+  /**
+   * 页面登录态安装的两个槽位（`signature` / `installing`，语义见 `page-session.ts`）。
+   *
+   * 🔴 用**签名**而不是一个 boolean：多账号下换了号，页面还停在旧账号的登录态上，
+   * 就变成"页面是 A、请求带 B"—— 比不装更假。签名变了就重装一次。
+   * 放在独立字段里而不是摊平到本接口上，是为了能整体交给 `runPageSessionInstall`
+   * （顺序语义由那个被测函数持有）。
+   */
+  pageSession: PageSessionSlot
 }
 
 let activeSession: BrowserTransportSession | undefined
@@ -79,7 +187,7 @@ async function waitForTransportDebugPort(
   return undefined
 }
 
-/** 找一个可用的 page target（we use about:blank）。 */
+/** 找一个可用的 page target（启动时就带着站点 URL，见 `transportBrowserArgs`）。 */
 async function findPageTarget(port: number, timeoutMs = 20_000): Promise<any | null> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
@@ -173,6 +281,173 @@ function handleBindingEvent(payload: string): void {
   }
 }
 
+/**
+ * 等页面站到目标站点 origin 上；不对就导航过去。
+ *
+ * ## 为什么这件事是必须的（2026-10-14）
+ *
+ * 2026-10-14 之前传输层启动在 **`about:blank`**（`buildBrowserArgs(PROFILE_DIR, 'about:blank')`），
+ * 于是每个请求都是"从 `about:blank` 发出、打到 chat.deepseek.com 的跨源请求"：
+ *  - `Origin` 不是站点 origin（`Origin` 是**禁止头**，脚本补不了，只能靠页面自己在那个 origin 上）；
+ *  - `Referer` 缺失；
+ *  - `Sec-Fetch-Site` 是 `cross-site` 而不是同源的 `same-origin`。
+ *
+ * 这三样都是站点风控能直接看到的东西，而**真实浏览器里发这个请求的页面就站在
+ * chat.deepseek.com 上**。所以"更像真浏览器"最实在的一步，就是让页面站过去。
+ *
+ * ⚠️ 用轮询 `location.origin` 而不是监听 `Page.loadEventFired`：
+ * 事件可能在我们挂上监听器之前就发完了（CDP 事件没有重放），轮询没有这个竞态。
+ * 超时**不抛错** —— 拿不到站点 origin 时退回旧行为，总比整个传输层起不来好。
+ */
+async function ensureSiteOrigin(cdp: CdpClient, timeoutMs = 20_000): Promise<boolean> {
+  const wanted = new URL(TRANSPORT_SITE_ORIGIN).origin
+  const deadline = Date.now() + timeoutMs
+  let navigated = false
+  while (Date.now() < deadline) {
+    try {
+      const result: any = await cdp.send('Runtime.evaluate', {
+        expression: 'location.origin',
+        returnByValue: true,
+      })
+      const origin = String(result?.result?.value ?? '')
+      if (origin === wanted) return true
+      if (!navigated) {
+        navigated = true
+        await cdp.send('Page.enable').catch(() => {})
+        await cdp.send('Page.navigate', { url: `${TRANSPORT_SITE_ORIGIN}/` }).catch(() => {})
+      }
+    } catch {
+      /* 导航过程中 evaluate 可能短暂失败，继续轮询 */
+    }
+    await new Promise((r) => setTimeout(r, 300))
+  }
+  return false
+}
+
+/**
+ * 重载后等页面重新可执行（`document.readyState` 到 interactive/complete）。
+ *
+ * 为什么必须等：装完登录态要**重载页面**才能生效（站点 JS 是在**启动时**
+ * 读 `localStorage.userToken` 的，不重载它不会发现自己已登录），
+ * 而重载期间执行上下文会被销毁 —— 这时代 `Runtime.evaluate` 发请求
+ * 会拿到 "Cannot find context with specified id" 这类错。
+ *
+ * ⚠️ 不抛错、返回 boolean：等不到也让请求照常发出去（卡住不动的代价更大）。
+ */
+async function waitForPageReady(cdp: CdpClient, timeoutMs = 8_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      const result: any = await cdp.send('Runtime.evaluate', {
+        expression: 'document.readyState',
+        returnByValue: true,
+      })
+      const state = String(result?.result?.value ?? '')
+      if (state === 'interactive' || state === 'complete') return true
+    } catch {
+      /* 重载途中 evaluate 会失败，继续等 */
+    }
+    await new Promise((r) => setTimeout(r, 200))
+  }
+  return false
+}
+
+/**
+ * 页面重载后**重新注册**绑定通道，并验证它在新文档里真的可用。
+ *
+ * 🔴 为什么不能省：`Runtime.addBinding` 注册的绑定在**导航之后是否自动重现**，
+ * 取决于 Chrome 版本 —— 这件事不能假定。绑定丢了的话，页面脚本会以
+ * `__dshBrowserTransportCallback is not defined` 直接抛错，
+ * 而调用方只会看到"请求莫名其妙失败"，极难归因。
+ *
+ * 所以这里注册完还要**问一次 `typeof`**，而不是假定成功
+ * （重复注册在部分版本会报错 —— 已被 `catch` 吃掉，不影响结果）。
+ */
+async function reinstallPageBindings(cdp: CdpClient): Promise<boolean> {
+  await cdp.send('Runtime.enable').catch(() => {})
+  await cdp.send('Runtime.addBinding', { name: BINDING_NAME }).catch(() => {})
+  await cdp.send('Runtime.addBinding', { name: POW_BINDING }).catch(() => {})
+  try {
+    const expression =
+      'JSON.stringify([' +
+      `typeof globalThis[${JSON.stringify(BINDING_NAME)}],` +
+      `typeof globalThis[${JSON.stringify(POW_BINDING)}]` +
+      '])'
+    const result: any = await cdp.send('Runtime.evaluate', { expression, returnByValue: true })
+    const kinds = JSON.parse(String(result?.result?.value ?? 'null'))
+    return Array.isArray(kinds) && kinds.every((kind) => kind === 'function')
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 用 CDP 装 cookie —— 这是唯一**真的能发出去**的通道。
+ *
+ * `Network.setCookie` 不受"禁止头"约束，而且能写 **httpOnly** cookie
+ * （那几个往往才是真正决定登录态的）。单条失败不致命：cookie 与
+ * `Authorization` 是两条独立的凭证，缺一条不该把整轮打掉。
+ */
+export async function installCookiesViaCdp(
+  cdp: Pick<CdpClient, 'send'>,
+  cookieHeader: string,
+  requestUrl: string,
+): Promise<number> {
+  if (!cookieHeader) return 0
+  // 按**请求自己的 origin** 安装（生产里这些请求就是打到 chat.deepseek.com 的）。
+  // 不写死站点 origin：写死的话，任何非站点的请求（比如诊断/用例里的本地服务）
+  // 拿到的 cookie 都会被装到别的域上 —— 而且那样这一处**没法端到端验证**。
+  let origin: string
+  try {
+    origin = new URL(requestUrl).origin
+  } catch {
+    return 0
+  }
+  const cookies = cookiesForCdp(cookieHeader, `${origin}/`)
+  if (cookies.length === 0) return 0
+  await cdp.send('Network.enable').catch(() => {})
+  let installed = 0
+  for (const cookie of cookies) {
+    try {
+      // 🔴 `Network.setCookie` 失败时**返回 `{success: false}` 而不抛错** ——
+      // 不看返回值就等于把"cookie 又没装上"变成又一次静默失败（这正是这次要修的毛病）。
+      const result: any = await cdp.send('Network.setCookie', cookie)
+      if (result === undefined || result?.success !== false) installed += 1
+    } catch {
+      /* 单条失败继续装下一条 */
+    }
+  }
+  return installed
+}
+
+/**
+ * 传输层浏览器的启动参数（**纯函数**，所以用例可以直接断言它，而不用去断源码位置）。
+ *
+ * 两个不能省的要点：
+ *  1. **启动 URL 是站点自己**（`TRANSPORT_SITE_ORIGIN`），不是 `about:blank`。
+ *     这是"Origin/Referer/Sec-Fetch-* 像不像真浏览器"的唯一正解 ——
+ *     `Origin` 是禁止头，脚本补不了，只能靠页面真的站在那个 origin 上。
+ *  2. `--no-sandbox` 只在这里加（来自 `transportExtraArgs()`）。
+ *     Linux 上 headless Chrome 要 sandbox，而 CI runner / 容器是 root ⇒ 起不来。
+ *     ⚠️ **绝不能**加进 `buildBrowserArgs` —— 那个函数登录窗口也在用，
+ *     登录窗口要加载真实页面、用户在里面手动输密码，关它的 sandbox 才是真的扩大攻击面。
+ *     理由详见 `browser-login.ts: transportExtraArgs()` 的注释。
+ */
+export function transportBrowserArgs(profileDir: string): string[] {
+  return [
+    ...buildBrowserArgs(profileDir, `${TRANSPORT_SITE_ORIGIN}/`),
+    ...transportExtraArgs(),
+    '--headless=new',
+    '--disable-gpu',
+    '--disable-dev-shm-usage',
+    '--allow-insecure-localhost',
+    // ⚠️ 这一条在"页面站对 origin"之后已经不是必需（同源请求本就不触发 CORS），
+    // 但它**不改变 JS 可见的指纹**，而拿掉它有打不开站点的风险 ⇒ 暂时留着、单独评估。
+    '--disable-web-security',
+    '--disable-features=IsolateOrigins,site-per-process',
+  ]
+}
+
 export async function launchBrowserTransport(): Promise<BrowserTransportSession> {
   if (activeSession) return activeSession
   if (launchPromise) return launchPromise
@@ -190,21 +465,7 @@ export async function launchBrowserTransport(): Promise<BrowserTransportSession>
 
     const child = spawn(
       browser.path,
-      [
-        ...buildBrowserArgs(PROFILE_DIR, 'about:blank'),
-        // 🔴 2026-10-10：只给**这一处**（headless 请求代理）加 `--no-sandbox`。
-        //   Linux 上 headless Chrome 要 sandbox，而 CI runner / 容器是 root ⇒ 起不来。
-        //   ⚠️ **不能**加进 `buildBrowserArgs`：那个函数登录窗口也在用，
-        //   而登录窗口要加载真实页面、用户在里面手动输密码 ⇒ 关它的 sandbox 才真的扩大攻击面。
-        //   理由详见 `browser-login.ts: transportExtraArgs()` 的注释。
-        ...transportExtraArgs(),
-        '--headless=new',
-        '--disable-gpu',
-        '--disable-dev-shm-usage',
-        '--allow-insecure-localhost',
-        '--disable-web-security',
-        '--disable-features=IsolateOrigins,site-per-process',
-      ],
+      transportBrowserArgs(PROFILE_DIR),
       {
         stdio: 'ignore',
         detached: false,
@@ -261,6 +522,16 @@ export async function launchBrowserTransport(): Promise<BrowserTransportSession>
       /* 已有会话可能注册过；失败不致命，真用到时会在 solvePoWInPage 里报错 */
     })
 
+    // 🔴 让页面站到站点自己的 origin 上（否则 `Origin`/`Referer`/`Sec-Fetch-*` 都不是真浏览器的样子）。
+    // 失败只记一笔、不抛：退回旧行为也比整个传输层起不来强。
+    const onSite = await ensureSiteOrigin(cdp).catch(() => false)
+    if (!onSite) {
+      console.warn(
+        `[deepseek-web] 传输层页面没能停在 ${TRANSPORT_SITE_ORIGIN} 的 origin 上，` +
+        '本次请求的 Origin/Referer 会与真实浏览器不一致',
+      )
+    }
+
     cdp.onEvent((method, params) => {
       if (method === 'Runtime.bindingCalled') {
         const name = String(params?.name ?? '')
@@ -285,7 +556,7 @@ export async function launchBrowserTransport(): Promise<BrowserTransportSession>
 
     child.on('exit', cleanup)
 
-    return { browser, child, cdp, cleanup }
+    return { browser, child, cdp, cleanup, pageSession: {} }
   })()
 
   try {
@@ -505,18 +776,50 @@ export function createBrowserFetch(): typeof fetch {
 
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
     const method = init?.method ?? 'GET'
-    const headers: Record<string, string> = {}
+    const rawHeaders: Record<string, string> = {}
     if (init?.headers) {
       if (init.headers instanceof Headers) {
         init.headers.forEach((value, key) => {
-          headers[key] = value
+          rawHeaders[key] = value
         })
       } else if (Array.isArray(init.headers)) {
-        for (const [key, value] of init.headers) headers[key] = value
+        for (const [key, value] of init.headers) rawHeaders[key] = value
       } else {
-        for (const [key, value] of Object.entries(init.headers)) headers[key] = String(value)
+        for (const [key, value] of Object.entries(init.headers)) rawHeaders[key] = String(value)
       }
     }
+
+    // 🔴 禁止头**不能**交给页面里的 `fetch` —— 浏览器会不报错地直接丢掉（`Cookie` 就在名单里）。
+    // 2026-10-14 之前 cookie 走的就是这条路 ⇒ 浏览器传输层一直没发过 cookie，只靠 `Authorization`。
+    // 现在 cookie 改走 CDP 的 `Network.setCookie`（不受禁止头约束、且能写 httpOnly）。
+    // `Origin`/`Referer` 同理不能手写 —— 由 `ensureSiteOrigin()` 让页面站对 origin 来保证。
+    const { headers, cookieHeader } = splitBrowserFetchHeaders(rawHeaders)
+    // 装了 0 条但本来是有 cookie 的 ⇒ 又是一次静默失败，必须说出来（以前就是这么丢的）。
+    if (cookieHeader) {
+      const installed = await installCookiesViaCdp(session.cdp, cookieHeader, url)
+      if (installed === 0) {
+        console.warn('[deepseek-web] cookie 一条都没装进传输层浏览器，本次请求会缺少 cookie 凭证')
+      }
+    }
+
+    // ── 让页面**自己知道已登录**（站点心跳的来源）──────────────────────────
+    // 只装 cookie 不够：网页端的登录态读的是 `localStorage.userToken`。
+    // 不装 ⇒ 页面渲染登录页、站点自己的 JS 从不发起会话轮询/长连接，
+    // 而我们的请求却带着合法 Bearer —— 真人身上不会出现的组合。
+    // 装完重载 ⇒ 站点应用真的跑起来，心跳由**站点自己**产生
+    // （**不自己造定时 ping**：固定周期本身就是一种模式）。
+    //
+    // 顺序与置位语义都在 `runPageSessionInstall` 里（已被用例守着）：
+    // 签名**只在装成功后**写入 ⇒ 瞬时失败下次仍会重试。
+    await runPageSessionInstall(session.pageSession, pageSessionFromHeaders(rawHeaders), {
+      install: (writes) => installPageSessionViaCdp(session.cdp, writes),
+      afterInstall: async () => {
+        await session.cdp.send('Page.reload', {}).catch(() => {})
+        await waitForPageReady(session.cdp)
+        return await reinstallPageBindings(session.cdp)
+      },
+      warn: (message) => console.warn(`[deepseek-web] ${message}`),
+    })
 
     // ⚠️ 现在要 await：FormData/Blob 需要先读出字节才能序列化（图片上传就走这条路）。
     const bodyExpr = await bodyToPageInit(init?.body)
@@ -555,10 +858,15 @@ export function createBrowserFetch(): typeof fetch {
           const init = {
             method: ${JSON.stringify(method)},
             headers: ${JSON.stringify(headers)},
+            // 🔴 cookie 已经由 CDP 的 Network.setCookie 装进这个 profile 了；
+            // same-origin 是同源默认值，生产里页面就在站点 origin 上、本来就会带上。
+            // 显式写 include 是为了不让"页面 origin 变了"这类改动悄悄把 cookie 弄丢。
+            // ⚠️ 这段注释在**模板字符串内部**，所以一个反引号都不能有（会提前终止字符串）。
+            credentials: 'include',
             body: ${bodyExpr},
           };
           const requestInit = init.body === undefined
-            ? { method: init.method, headers: init.headers }
+            ? { method: init.method, headers: init.headers, credentials: init.credentials }
             : init;
           const resp = await fetch(${JSON.stringify(url)}, requestInit);
           ${BINDING_NAME}(JSON.stringify({
