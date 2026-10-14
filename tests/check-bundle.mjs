@@ -1243,6 +1243,21 @@ const checks = {
     // ⚠️ 判 `host` 而不是 `srcWebapi`：源码里是模板字符串拼接（`${...}`），
     // 产物里才是 `String(input.salt) + "_" + String(input.expireAt) + "_"`。
     /String\(input\.salt\)\s*\+\s*"_"\s*\+\s*String\(input\.expireAt\)\s*\+\s*"_"/.test(host),
+
+  // ── 0.9.2：产物里**不许再有自报家门头** ────────────────────────────────
+  //
+  // 两条一起看才有意义：
+  //  ① **值必须消失** —— 那个头是"只有插件会带"的确定性标记，服务端一行 `if` 就能把
+  //     「网页版 vs 插件」分开（`dsh-webin` 的 README 列为最高风险单点）。
+  //     这条**不是**"文案复制守卫"：断言的是**要发出去的那个头的值**，它消失 = 不发这个头。
+  //     ⚠️ 安全性依据：本产物**不保留注释**（已核：这个头名在产物里只剩下面那条正则，
+  //     源码里解释它的那段长注释一个字都没进来）⇒ 不会被注释喂饱。
+  //  ② **清扫必须在** —— 家族有 4 个变体，将来若快照里混进任何一个，靠它兜住。
+  '产物里不再有伪造的自报家门头（值必须消失）':
+    !/deepseek-harness\s*\(\s*\+https:\/\/github\.com\/deepseek-ai\/deepseek-harness\s*\)/.test(host),
+
+  '产物里保留着 x-deepseek-harness* 的前缀清扫（快照混进来也发不出去）':
+    /\^x-deepseek-harness/.test(host),
 }
 
 let failed = 0
