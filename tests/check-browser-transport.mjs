@@ -15,6 +15,31 @@ import { join } from 'node:path'
 const HOME = mkdtempSync(join(tmpdir(), 'dsh-browser-transport-'))
 process.env.DSH_HOME = HOME
 
+/**
+ * 是否允许本文件真启浏览器。
+ *
+ * 🔴 离线跑批（`scripts/test-offline.mjs`）会给每个子进程钉上 `DSH_NO_BROWSER_TRANSPORT=1`
+ *   ⇒ 下面那些"真启浏览器"的用例会走各自的 skip 分支。要手动验证浏览器路径：
+ *   `DSH_BROWSER_TESTS=1 node tests/check-browser-transport.mjs`（**别放进 CI**）。
+ *
+ * 为什么要这样分工（2026-10-14 实测）：
+ *   - 跑批**不许**与"这台机器碰巧有没有 Edge/Chrome"有关。ubuntu runner 上
+ *     `systemBrowserAvailable()` 为 false ⇒ 整套跳过；win/mac 上它为 true ⇒ 真启浏览器。
+ *     同一个提交在两个平台跑的是**两件事**，而且真启那条在冷 runner 上轮流报红、
+ *     失败时**零输出**（退出码 1、连一条 ✓ 都没有），无法归因。
+ *   - ⚠️ 本文件最后一条用例断言的是**重载后**页面里的 `userToken`，而写进去的是**假 token**
+ *     （`SESSION-TOKEN-TEST`）：站点自己的 JS 会把它归一化成未登录形态
+ *     `{"value":null,"__version":"0"}` —— 读到的值与"站点鉴权请求的网络时序"赛跑，
+ *     于是同一条用例时红时绿（本机与 CI 都复现过）。
+ *     ⇒ 要真验"页面认得自己已登录"必须用**真账号**，不能用假 token。
+ */
+const allowBrowserLaunch = process.env.DSH_BROWSER_TESTS === '1'
+
+/** 只有显式允许时才摘掉跑批钉上的开关。 */
+function allowBrowserForThisCase() {
+  if (allowBrowserLaunch) delete process.env.DSH_NO_BROWSER_TRANSPORT
+}
+
 const failures = []
 
 async function test(name, fn) {
@@ -42,28 +67,34 @@ async function main() {
     assert.equal(systemBrowserAvailable(), false)
   })
 
-  // 3. resolveTransportState 在浏览器可用时选择浏览器代理
-  await test('浏览器可用时 resolveTransportState 走 viaBrowserProxy', async () => {
-    delete process.env.DSH_NO_BROWSER_TRANSPORT
-    const [{ resolveTransportState }, { findSystemBrowser }] = await Promise.all([
+  // 3. resolveTransportState 的选择规则
+  await test('resolveTransportState 必须与 systemBrowserAvailable 同答', async () => {
+    allowBrowserForThisCase()
+    const [{ resolveTransportState }, { systemBrowserAvailable, findSystemBrowser }] = await Promise.all([
       import('../src/transport.ts?with-browser=' + Date.now()),
       import('../src/browser-transport.ts?find=' + Date.now()),
     ])
-    const browser = findSystemBrowser()
+    // 🔴 判据必须与产品**同源**：`findSystemBrowser()` 只看"二进制文件在不在"，
+    //   而产品走的是 `systemBrowserAvailable()`（还看平台能不能真跑、以及开关）。
+    //   2026-10-14 实测：ubuntu runner 上"文件在"但"跑不起来"（非 root 起不来 headless），
+    //   旧写法拿前者当条件去断言后者 ⇒ `'node' !== 'chromium'` 报红；
+    //   同一个提交在 win/mac 上又是另一种形态（真启浏览器、与站点行为赛跑）。
+    const usable = systemBrowserAvailable()
+    const binary = findSystemBrowser()
     const state = resolveTransportState('chromium')
-    if (browser) {
-      assert.equal(state.effective, 'chromium')
+    if (usable) {
+      assert.equal(state.effective, 'chromium', `可用时必须走浏览器代理（二进制探针=${binary ? '有' : '无'}）`)
       assert.equal(state.viaBrowserProxy, true)
       assert.equal(state.degraded, false)
     } else {
-      assert.equal(state.effective, 'node')
+      assert.equal(state.effective, 'node', `不可用时必须走 node（二进制探针=${binary ? '有' : '无'}）`)
       assert.equal(state.degraded, true)
     }
   })
 
   // 4. 浏览器 fetch 能走真实 HTTP 请求（对本地 server 发 POST + 流响应）
   await test('浏览器 fetch 可发送 POST 并读取响应', async () => {
-    delete process.env.DSH_NO_BROWSER_TRANSPORT
+    allowBrowserForThisCase()
     const { createBrowserFetch, shutdownBrowserTransport, systemBrowserAvailable } = await import(
       '../src/browser-transport.ts?integration=' + Date.now()
     )
@@ -125,7 +156,7 @@ async function main() {
   // 0.6.20 的浏览器代理传输层只支持 string/Uint8Array/ArrayBuffer，遇到 FormData 直接抛
   // "暂不支持"，于是"切到浏览器代理之后图片全传不上去"（2026-10-01 用户报）。
   await test('★ 浏览器 fetch 能上传 FormData（图片上传走这条路）', async () => {
-    delete process.env.DSH_NO_BROWSER_TRANSPORT
+    allowBrowserForThisCase()
     const { createBrowserFetch, shutdownBrowserTransport, systemBrowserAvailable } = await import(
       '../src/browser-transport.ts?formdata=' + Date.now()
     )

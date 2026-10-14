@@ -127,6 +127,27 @@ test('★ 会触发浏览器传输的用例必须钉住 DSH_NO_BROWSER_TRANSPORT
   )
 })
 
+test('★ 离线跑批默认不许真启浏览器（与机器装没装浏览器无关），要跑得显式开关', () => {
+  // 2026-10-14：真启浏览器的那条用例只在"这台机器有 Edge/Chrome"时才跑 ——
+  // ubuntu runner 跳过（全量 41s）、win/mac 真启。同一个提交在两平台跑的**不是同一件事**，
+  // 而真启那条在冷 runner 上轮流报红、失败时**零输出**，无法归因。
+  // ⚠️ 反向验证：把 test-offline 里那行 env 删掉 → 这条变红。
+  const runner = readFileSync(join(ROOT, 'scripts', 'test-offline.mjs'), 'utf8')
+  assert.ok(runner.includes("process.env.DSH_BROWSER_TESTS === '1'"), '跑批必须有显式的浏览器用例开关')
+  assert.ok(runner.includes("DSH_NO_BROWSER_TRANSPORT: '1'"), '跑批默认必须给子进程钉上 DSH_NO_BROWSER_TRANSPORT')
+
+  // 会真启浏览器的文件必须只认这个显式开关（不能自己把跑批钉的开关摘掉）
+  const transport = readFileSync(join(testsDir, 'check-browser-transport.mjs'), 'utf8')
+  assert.ok(
+    transport.includes("process.env.DSH_BROWSER_TESTS === '1'"),
+    'check-browser-transport 必须只在 DSH_BROWSER_TESTS=1 时才允许真启浏览器',
+  )
+  assert.ok(
+    !/^\s*delete process\.env\.DSH_NO_BROWSER_TRANSPORT\s*$/m.test(transport),
+    '不许无条件摘掉跑批钉的开关（要摘得先过 DSH_BROWSER_TESTS 判定）',
+  )
+})
+
 test('★ 跑批脚本必须给子进程注入临时 DSH_HOME（兜底，防新用例忘了隔离）', () => {
   const runner = readFileSync(join(ROOT, 'scripts', 'test-offline.mjs'), 'utf8')
   assert.ok(

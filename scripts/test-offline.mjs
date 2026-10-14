@@ -57,6 +57,25 @@ const SLOW_FILES = { 'check-browser-transport.mjs': 600_000 }
  */
 const LOG_DIR = mkdtempSync(join(tmpdir(), 'dsh-offline-logs-'))
 
+/**
+ * 是否允许用例真启浏览器。
+ *
+ * 🔴 默认**不许**。理由（2026-10-14 实测）：真启浏览器的那条用例会不会跑，
+ * 取决于"这台机器碰巧有没有 Edge/Chrome" —— ubuntu runner 上没有 ⇒ 整套跳过（全量 41s），
+ * 而 win/mac 上有 ⇒ 真启。同一个提交在两个平台跑的是**两件事**，
+ * 并且真启那条在冷 runner 上轮流报红、失败时**零输出**（连一条 ✓ 都没有），无法归因。
+ * ⇒ 判据是"离线套件与机器装没装浏览器无关"。要手动验证浏览器路径：
+ *   `DSH_BROWSER_TESTS=1 node scripts/test-offline.mjs`（别放进 CI）。
+ */
+const ALLOW_BROWSER = process.env.DSH_BROWSER_TESTS === '1'
+
+// 让"绿是因为跳过了浏览器路径"这件事在日志里**看得见**（别把跳过当成验证过了）
+console.log(
+  ALLOW_BROWSER
+    ? '⚠️ DSH_BROWSER_TESTS=1：本次允许真启浏览器（会慢很多，且与站点行为赛跑，别放进 CI）'
+    : '（已关闭浏览器用例：DSH_NO_BROWSER_TRANSPORT=1；要手动验证浏览器路径见 tests/check-browser-transport.mjs 顶部）',
+)
+
 const failed = []
 for (const file of files) {
   console.log(`\n=== ${file} ===`)
@@ -67,7 +86,12 @@ for (const file of files) {
     result = spawnSync(process.execPath, [join(testsDir, file)], {
       cwd: ROOT,
       stdio: ['ignore', fd, fd],
-      env: { ...process.env, DSH_HOME: SANDBOX_HOME },
+      env: {
+        ...process.env,
+        DSH_HOME: SANDBOX_HOME,
+        // 默认钉住：用例里那些"真启浏览器"的分支都会走各自的 skip
+        ...(ALLOW_BROWSER ? {} : { DSH_NO_BROWSER_TRANSPORT: '1' }),
+      },
       // 单个文件的上限：超过说明有东西挂住了（而不是"慢"）。慢的用例见 SLOW_FILES。
       timeout: SLOW_FILES[file] ?? 180_000,
     })
