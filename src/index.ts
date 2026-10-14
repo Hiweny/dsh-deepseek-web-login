@@ -121,6 +121,12 @@ import {
   shutdownBrowserTransport,
   transportHeartbeatSnapshot,
 } from './transport.ts'
+import { pageSessionFromHeaders } from './page-session.ts'
+import {
+  guestSessionHeaders,
+  normalizeGuestBeat,
+  type GuestBeat,
+} from './guest-browser.ts'
 import {
   applyContextMode,
   applyFreshSessionOnRestart,
@@ -266,6 +272,14 @@ function sendJson(res: any, status: number, payload: unknown): void {
 
 /** `/accounts/refresh` 的互斥：手动刷新是串行探活，狂点按钮不该叠起来打。 */
 let accountsRefreshInFlight = false
+
+/**
+ * 内置浏览器（guest）最近一次心跳。
+ *
+ * 存活判断在**面板侧**（只有它拿着那个 `<webview>` 元素），host 只做校验与留痕 ——
+ * 面板是不可信输入，形状不对就整条丢掉（见 `normalizeGuestBeat`）。
+ */
+let guestBeat: GuestBeat | null = null
 
 export function apply(ctx: any, config: Config = {}): void {
   const logger = normalizeLogger(ctx.logger)
@@ -1484,6 +1498,45 @@ export function apply(ctx: any, config: Config = {}): void {
               return
             }
 
+            /**
+             * 内置浏览器（guest）：把"当前账号的登录态怎么写 + 那份真实 UA"交给面板。
+             *
+             * ⚠️ 回的是**可完整登录的凭证**（与 `/accounts/export` 同级）：只给同源面板用，
+             * 任何日志里都不许打印它。写法经过与传输层**同一条**转换链
+             * （`guestSessionHeaders` → `pageSessionFromHeaders`）—— 两边形状一旦分叉，
+             * 就会出现"传输层装对了、guest 装错了"这种只在一半地方生效的 bug。
+             */
+            if (req.method === 'GET' && route === '/browser/session') {
+              const activeId = activeAccountId()
+              const account = activeId ? listAccounts().find((item) => item.id === activeId) : undefined
+              if (!account) {
+                sendJson(res, 200, { ok: false, error: '账号库里没有可用账号（先在账号页添加或登录一个）' })
+                return
+              }
+              const writes = pageSessionFromHeaders(guestSessionHeaders(account))
+              sendJson(res, 200, {
+                ok: writes.length > 0,
+                account: account.id,
+                userAgent: account.userAgent || '',
+                writes,
+                ...(writes.length ? {} : { error: '这个账号没有 token（重新登录一次再试）' }),
+              })
+              return
+            }
+
+            // guest 心跳：host 只校验 + 留痕（存活判断在面板侧，见 guestBeat 的注释）。
+            if (req.method === 'POST' && route === '/browser/guest-beat') {
+              const body = await readJsonBody(req)
+              const beat = normalizeGuestBeat(body?.beat ?? body)
+              if (!beat) {
+                sendJson(res, 400, { ok: false, error: '心跳形状不合法（state 必须是已知状态、at 必填）' })
+                return
+              }
+              guestBeat = beat
+              sendJson(res, 200, { ok: true })
+              return
+            }
+
             // 上下文投喂方式：每轮重发全量 prompt，还是只发增量 + parent 链（见 context-feed.ts）。
             if (req.method === 'GET' && route === '/context-mode') {
               sendJson(res, 200, {
@@ -1636,6 +1689,8 @@ export function apply(ctx: any, config: Config = {}): void {
                   transport: transportState.effective,
                   // 传输层保活心跳：面板/排查用（探测只走本地 CDP，不发网络请求）
                   transportHeartbeat: transportHeartbeatSnapshot() ?? null,
+                  // 内置浏览器（guest）最近一次心跳：面板报上来、host 校验后留痕
+                  guest: guestBeat,
                   contextMode,
                   contextChain: contextChainInfo() ?? null,
                   version: pluginVersion(),

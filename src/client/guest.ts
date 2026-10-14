@@ -1,0 +1,324 @@
+/**
+ * 面板侧：内置浏览器 guest 的生命周期 + 保活。
+ *
+ * ## 硬约束（踩了就会"看起来在工作、其实是重新加载了页面"）
+ *
+ * 1. **容器自始至终不移动、不重建**：Electron 的 `<webview>` 一旦从 DOM 摘除再插回，
+ *    guest 会**重新加载**。所以宿主节点挂在一个永不卸载的槽位（`shell.overlay`）上，
+ *    设置页只控制"显示/隐藏"，绝不搬运这个节点。
+ * 2. 创建顺序：先设 `partition` + `src=about:blank#<lease>`（门禁要求精确相等），
+ *    再挂上去；`useragent` 必须在**第一次导航到站点之前**设好 —— 晚一步，
+ *    站点看到的就是带 Electron 痕迹的 UA（"洗白"白做）。
+ * 3. 装完登录态**必须 reload**：站点 JS 是在启动时读 `userToken` 的，不 reload 等于没装。
+ *
+ * ## 这个浏览器不参与发消息
+ *
+ * 它只负责"有一个真人那样活着的页面"（站点自己的 JS 在跑）。回答不回显、发送不走它。
+ */
+import {
+  GUEST_BROWSER_URL,
+  guestProbeExpression,
+  type GuestBeat,
+  type GuestBeatState,
+} from '../guest-browser.ts'
+import { judgeObservation, pickIntervalMs, SITE_ORIGIN } from '../transport-heartbeat.ts'
+
+interface GuestReservation {
+  lease: string
+  partition: string
+}
+
+/** 宿主 preload 暴露的浏览器 guest 桥（只有主窗口主 frame 有）。 */
+interface DesktopBrowserBridge {
+  acquire(workspace: string): Promise<GuestReservation>
+  release(lease: string): Promise<void>
+}
+
+interface GuestElement extends HTMLElement {
+  loadURL(url: string): Promise<void>
+  executeJavaScript(code: string): Promise<unknown>
+  reload(): void
+}
+
+export interface GuestStatus {
+  running: boolean
+  state: GuestBeatState
+  at: number
+  url: string
+  beats: number
+  recoveries: number
+  account?: string
+  note?: string
+  error?: string
+}
+
+export interface GuestSessionResult {
+  ok: boolean
+  account?: string
+  userAgent?: string
+  writes?: { key: string; value: string }[]
+  error?: string
+}
+
+export interface GuestDeps {
+  /** 从 host 取"当前账号的登录态写法和那份真实 UA"。 */
+  fetchSession: () => Promise<GuestSessionResult>
+  /** 把写法编成页面脚本（复用 page-session 的构建器）。 */
+  buildInstall: (writes: { key: string; value: string }[]) => string
+  /** 把心跳报给 host（host 会校验形状）。 */
+  reportBeat: (beat: GuestBeat) => Promise<void>
+  workspace?: string
+  intervalMs?: number
+  now?: () => number
+  random?: () => number
+  log?: (message: string) => void
+  /** 等待事件；用例里可注入成"立刻返回"。 */
+  waitEvent?: (element: GuestElement, event: string, timeoutMs: number) => Promise<boolean>
+}
+
+export interface GuestBrowser {
+  start: () => Promise<GuestStatus>
+  stop: () => Promise<GuestStatus>
+  setVisible: (visible: boolean) => void
+  visible: () => boolean
+  status: () => GuestStatus
+  subscribe: (fn: (status: GuestStatus) => void) => () => void
+  /** 单次探测 + 判定 + 必要时恢复（用例直接调它，不依赖真定时器）。 */
+  beatOnce: () => Promise<GuestStatus>
+}
+
+const DEFAULT_INTERVAL_MS = 60_000
+
+/** 宿主节点：由 overlay 组件注册进来，永不卸载。 */
+let hostNode: HTMLElement | undefined
+
+export function registerGuestHost(node: HTMLElement | null): void {
+  hostNode = node ?? undefined
+}
+
+export function guestHostNode(): HTMLElement | undefined {
+  return hostNode
+}
+
+function bridge(): DesktopBrowserBridge | undefined {
+  const carrier = (globalThis as unknown as { dshDesktop?: { protocolVersion?: number; browser?: unknown } })
+    .dshDesktop
+  if (!carrier || carrier.protocolVersion !== 1) return undefined
+  const found = carrier.browser as DesktopBrowserBridge | undefined
+  return found && typeof found.acquire === 'function' ? found : undefined
+}
+
+export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
+  const now = deps.now ?? (() => Date.now())
+  const random = deps.random ?? Math.random
+  const log = deps.log ?? (() => {})
+  const intervalMs = deps.intervalMs ?? DEFAULT_INTERVAL_MS
+  const waitEvent =
+    deps.waitEvent ??
+    ((element: GuestElement, event: string, timeoutMs: number) =>
+      new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => {
+          element.removeEventListener(event, onEvent)
+          resolve(false)
+        }, timeoutMs)
+        function onEvent(): void {
+          clearTimeout(timer)
+          element.removeEventListener(event, onEvent)
+          resolve(true)
+        }
+        element.addEventListener(event, onEvent)
+      }))
+
+  let element: GuestElement | undefined
+  let lease: string | undefined
+  let visible = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let inFlight = false
+  let status: GuestStatus = {
+    running: false,
+    state: 'idle',
+    at: 0,
+    url: '',
+    beats: 0,
+    recoveries: 0,
+  }
+  const listeners = new Set<(status: GuestStatus) => void>()
+
+  function emit(patch: Partial<GuestStatus>): void {
+    status = { ...status, ...patch }
+    for (const fn of listeners) {
+      try {
+        fn({ ...status })
+      } catch {
+        /* 面板回调出错不该拖垮 guest */
+      }
+    }
+  }
+
+  /** 把登录态写进 guest 页面，然后 **reload**（站点 JS 启动时才读它）。 */
+  async function installSession(): Promise<boolean> {
+    if (!element) return false
+    const session = await deps.fetchSession()
+    if (!session?.ok || !session.writes?.length) {
+      emit({ account: session?.account, note: session?.error ?? 'host 没有给出可用的登录态' })
+      return false
+    }
+    const expression = deps.buildInstall(session.writes)
+    const report = await element.executeJavaScript(expression)
+    emit({ account: session.account })
+    log(`guest：登录态已写入（${String(report).slice(0, 120)}）`)
+    element.reload()
+    await waitEvent(element, 'did-finish-load', 20_000)
+    return true
+  }
+
+  async function attach(): Promise<boolean> {
+    const carrier = bridge()
+    if (!carrier) {
+      emit({
+        running: false,
+        error: '本环境没有内置浏览器通道（需要 DSH 桌面端主窗口；仅在设置页里看不到它）',
+      })
+      return false
+    }
+    const node = hostNode
+    if (!node) {
+      emit({ running: false, error: '浏览器宿主节点还没挂上（打开设置页后重试）' })
+      return false
+    }
+    const reservation = await carrier.acquire(deps.workspace ?? 'deepseek-web-login')
+    lease = reservation.lease
+    const created = document.createElement('webview') as GuestElement
+    // 门禁要求：partition 用 acquire 给的；src 必须**精确**是 about:blank#<lease>
+    created.setAttribute('partition', reservation.partition)
+    created.setAttribute('src', `about:blank#${reservation.lease}`)
+    created.style.width = '100%'
+    created.style.height = '100%'
+    created.style.border = '0'
+    created.style.display = 'block'
+    node.appendChild(created)
+    element = created
+    const ready = await waitEvent(created, 'dom-ready', 20_000)
+    if (!ready) log('guest：dom-ready 等超时（继续试）')
+
+    // UA 必须在**第一次导航到站点之前**设好，否则站点看到的是带 Electron 痕迹的 UA
+    const session = await deps.fetchSession()
+    if (session?.userAgent) {
+      created.setAttribute('useragent', session.userAgent)
+    } else {
+      log('guest：host 没给 UA（账号记录里没有捕获到的 UA）⇒ 这一步洗白跳过')
+    }
+    await created.loadURL(GUEST_BROWSER_URL).catch((error) => {
+      log(`guest：导航失败 ${String(error)}`)
+    })
+    await waitEvent(created, 'did-finish-load', 25_000)
+    if (session?.ok && session.writes?.length) {
+      await installSession()
+    } else {
+      emit({ note: session?.error ?? 'host 没有给出可用的登录态（页面会是未登录）' })
+    }
+    emit({ running: true, error: undefined })
+    return true
+  }
+
+  async function detach(): Promise<void> {
+    if (timer !== undefined) {
+      clearTimeout(timer)
+      timer = undefined
+    }
+    element?.remove()
+    element = undefined
+    const current = lease
+    lease = undefined
+    if (current) {
+      await bridge()?.release(current).catch(() => {})
+    }
+    emit({ running: false })
+  }
+
+  function schedule(): void {
+    if (timer !== undefined || !element) return
+    // 抖动：固定周期本身就是模式（与传输层心跳同一个函数）
+    timer = setTimeout(() => {
+      timer = undefined
+      void beatOnce().then(() => {
+        if (status.running && status.state !== 'dead') schedule()
+      })
+    }, pickIntervalMs(intervalMs, random))
+  }
+
+  async function beatOnce(): Promise<GuestStatus> {
+    if (!element || inFlight) return { ...status }
+    inFlight = true
+    try {
+      let observed = null
+      try {
+        const raw = await element.executeJavaScript(guestProbeExpression())
+        observed = typeof raw === 'string' ? JSON.parse(raw) : null
+      } catch (error) {
+        observed = null
+        log(`guest：探测失败 ${String(error)}`)
+      }
+      const judged = judgeObservation(observed, SITE_ORIGIN)
+      const changed = judged.state !== status.state
+      emit({
+        state: judged.state,
+        at: now(),
+        beats: status.beats + 1,
+        url: String((observed as { url?: string } | null)?.url ?? ''),
+        ...(judged.reason ? { note: judged.reason } : {}),
+      })
+      if (changed) {
+        if (judged.state === 'logged-out') {
+          log('guest：页面未登录 ⇒ 重装登录态')
+          await installSession().catch((error) => emit({ note: `重装失败：${String(error)}` }))
+        } else if (judged.state === 'off-origin') {
+          log('guest：页面被导航走了 ⇒ 带回站点')
+          await element.loadURL(GUEST_BROWSER_URL).catch(() => {})
+        } else if (judged.state === 'dead') {
+          emit({ running: false, note: 'guest 探测不到（已停表，重新启动即可）' })
+        }
+        if (judged.state !== 'dead') emit({ recoveries: status.recoveries + 1 })
+      }
+      await deps.reportBeat({
+        state: status.state,
+        at: status.at,
+        url: status.url,
+        beats: status.beats,
+        recoveries: status.recoveries,
+        ...(status.note ? { note: status.note } : {}),
+      })
+      return { ...status }
+    } finally {
+      inFlight = false
+    }
+  }
+
+  return {
+    async start() {
+      if (status.running) return { ...status }
+      const ok = await attach().catch((error) => {
+        emit({ running: false, error: String((error as Error)?.message ?? error) })
+        return false
+      })
+      if (ok) schedule()
+      return { ...status }
+    },
+    async stop() {
+      await detach()
+      return { ...status }
+    },
+    setVisible(next: boolean) {
+      visible = next
+      const node = hostNode
+      if (node) node.style.display = next ? 'block' : 'none'
+    },
+    visible: () => visible,
+    status: () => ({ ...status }),
+    subscribe(fn) {
+      listeners.add(fn)
+      return () => listeners.delete(fn)
+    },
+    beatOnce,
+  }
+}

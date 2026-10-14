@@ -1275,6 +1275,19 @@ const checks = {
     /\bnoteTransportUsed\b/.test(host) &&
     /\btransportHeartbeatSnapshot\b/.test(host) &&
     /\.heartbeat\b/.test(client),
+
+  /**
+   * 内置浏览器（guest）：两端都要在产物里 —— host 提供登录态与心跳入口，
+   * 面板提供 guest 本体（`dshDesktop` 桥 + `<webview>` + 门禁要求的 `about:blank#`）。
+   * 少任何一半，"浏览器"页就只是一个空壳按钮。
+   */
+  '产物里带着内置浏览器（host 入口 + 面板侧 guest 本体）':
+    host.includes('/browser/session') &&
+    host.includes('/browser/guest-beat') &&
+    /\bnormalizeGuestBeat\b/.test(host) &&
+    client.includes('dshDesktop') &&
+    client.includes('webview') &&
+    client.includes('about:blank#'),
 }
 
 let failed = 0

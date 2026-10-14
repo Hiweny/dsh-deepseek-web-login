@@ -14,6 +14,8 @@ import {
 } from '../file-picker.ts'
 import { describeCookieLife, summarizeCookieLife } from '../cookies.ts'
 import { accountsSignature, shouldSyncAccounts } from '../account-sync.ts'
+import { buildSessionInstallExpression } from '../page-session.ts'
+import { createGuestBrowser, registerGuestHost, type GuestStatus } from './guest.ts'
 
 type ClientContext = {
   slots: any
@@ -426,6 +428,53 @@ function el(tag: string, cls?: string, text?: string): HTMLElement {
   return node
 }
 
+/**
+ * 内置浏览器 guest（模块级单例）。
+ *
+ * 它**不参与发消息**：只负责让 DSH 窗口里有一个真人那样活着的页面
+ * （站点自己的 JS 在跑）。回答不回显、发送仍走原有通路。
+ */
+const guestBrowser = createGuestBrowser({
+  fetchSession: () => api('/browser/session'),
+  buildInstall: buildSessionInstallExpression,
+  reportBeat: (beat) => api('/browser/guest-beat', { method: 'POST', body: JSON.stringify({ beat }) }),
+  log: (message) => console.log('[deepseek-web: guest]', message),
+})
+
+/**
+ * guest 的**永久宿主**：挂在 `shell.overlay`（root scope，永不卸载）。
+ *
+ * 🔴 为什么不能放在设置页里：Electron 的 `<webview>` 一旦从 DOM 摘除再插回就会
+ * **重新加载**，而这个页面的价值恰恰是"一直活着"。所以宿主固定在这里，
+ * 设置页只切它的显示/隐藏（改 `display`），绝不搬运节点。
+ */
+function GuestHost(): any {
+  const ref = useRef<any>(null)
+  useEffect(() => {
+    registerGuestHost(ref.current ?? null)
+    return () => registerGuestHost(null)
+  }, [])
+  return createElement('div', {
+    ref,
+    id: 'dsh-deepseek-guest-host',
+    style: {
+      position: 'fixed',
+      right: '16px',
+      bottom: '52px',
+      width: '420px',
+      height: '620px',
+      maxHeight: '80vh',
+      zIndex: 30,
+      overflow: 'hidden',
+      borderRadius: '10px',
+      border: '1px solid var(--dsw-alias-border-l2, #d9d9d9)',
+      background: 'var(--dsw-alias-bg-base, #fff)',
+      boxShadow: '0 8px 28px rgba(0,0,0,.18)',
+      display: 'none',
+    },
+  })
+}
+
 /** 面板本体：命令式 DOM（生态既有插件同款做法），挂在 React 容器里。 */
 function Panel(): any {
   const hostRef = useRef<HTMLDivElement | null>(null)
@@ -469,13 +518,14 @@ function Panel(): any {
     // ── 标签栏 + 四个页 ────────────────────────────────────────
     // 原来 7 张卡堆在一页，「找某一项」要滚很久。分组按"什么时候会用它"：
     //   账号（登录/换号）· 模型（查阅与测试）· 防风控（限流与清理）· 传输层（指纹）
-    const TAB_KEYS = ['account', 'model', 'token', 'gate', 'transport', 'context', 'about'] as const
+    const TAB_KEYS = ['account', 'model', 'token', 'gate', 'transport', 'browser', 'context', 'about'] as const
     const TAB_LABELS: Record<string, string> = {
       account: '账号',
       model: '模型',
       token: 'Token 统计',
       gate: '防风控',
       transport: '传输层',
+      browser: '浏览器',
       context: '上下文',
       about: '关于',
     }
@@ -484,6 +534,7 @@ function Panel(): any {
     const tokenPane = el('div', 'dsw-pane')
     const gatePane = el('div', 'dsw-pane')
     const transportPane = el('div', 'dsw-pane')
+    const browserPane = el('div', 'dsw-pane')
     const contextPane = el('div', 'dsw-pane')
     const aboutPane = el('div', 'dsw-pane')
     const panes: Record<string, HTMLElement> = {
@@ -492,6 +543,7 @@ function Panel(): any {
       token: tokenPane,
       gate: gatePane,
       transport: transportPane,
+      browser: browserPane,
       context: contextPane,
       about: aboutPane,
     }
@@ -510,6 +562,73 @@ function Panel(): any {
         if (on) paneFirstShow[each]?.()
       }
     }
+    // ── 浏览器页：内置 guest（只负责"有个活着的页面"，不回显、不参与发送）────
+    {
+      browserPane.append(
+        el(
+          'div',
+          'dsw-hint',
+          '在 DSH 窗口里挂一个真浏览器页面（停在网页端站点上），由插件保活：' +
+          '页面里站点自己的 JS 会跑。它不参与发消息 —— 发送仍走原有通路，网页端的回答不会回显到这里。' +
+          '⚠️ 首次启动需要 DSH 桌面端提供内置浏览器通道；拿不到时会在这里说明原因。',
+        ),
+      )
+      const startBtn = el('button', 'dsw-btn', '启动内置浏览器') as HTMLButtonElement
+      const toggleBtn = el('button', 'dsw-btn ghost', '显示浏览器') as HTMLButtonElement
+      const stopBtn = el('button', 'dsw-btn danger', '关闭并释放') as HTMLButtonElement
+      for (const btn of [startBtn, toggleBtn, stopBtn]) btn.type = 'button'
+      const row = el('div', 'dsw-row')
+      row.append(startBtn, toggleBtn, stopBtn)
+      const statusLine = el('div', 'dsw-hint', '内置浏览器：未启动')
+      const noteLine = el('div', 'dsw-hint', '')
+      browserPane.append(row, statusLine, noteLine)
+
+      const render = (status: GuestStatus): void => {
+        const ago = status.at ? Math.max(0, Math.round((Date.now() - status.at) / 1000)) : null
+        const label = status.error
+          ? `不可用（${status.error}）`
+          : !status.running
+            ? status.state === 'idle'
+              ? '未启动'
+              : '已停止'
+            : status.state === 'alive'
+              ? '保活中'
+              : status.state === 'logged-out'
+                ? '页面未登录（会在下次探测时重装）'
+                : status.state === 'off-origin'
+                  ? '页面被导航走（会带回站点）'
+                  : '探测不到页面'
+        statusLine.textContent =
+          `内置浏览器：${label}` +
+          (ago === null ? '' : ` · ${ago}s 前` ) +
+          (status.account ? ` · 账号 ${status.account}` : '') +
+          (status.beats ? ` · 探测 ${status.beats} 次 / 恢复 ${status.recoveries} 次` : '')
+        noteLine.textContent = status.note ?? ''
+      }
+      render(guestBrowser.status())
+      guestBrowser.subscribe(render)
+      startBtn.addEventListener('click', () => {
+        startBtn.disabled = true
+        void guestBrowser
+          .start()
+          .then((status) => {
+            render(status)
+            if (status.running) guestBrowser.setVisible(true)
+          })
+          .finally(() => {
+            startBtn.disabled = false
+          })
+      })
+      stopBtn.addEventListener('click', () => {
+        void guestBrowser.stop().then(render)
+      })
+      toggleBtn.addEventListener('click', () => {
+        const next = !guestBrowser.visible()
+        guestBrowser.setVisible(next)
+        toggleBtn.textContent = next ? '隐藏浏览器' : '显示浏览器'
+      })
+    }
+
     const tabBar = el('div', 'dsw-tabs')
     tabBar.setAttribute('role', 'tablist')
     for (const key of TAB_KEYS) {
@@ -3452,5 +3571,29 @@ export function apply(ctx: ClientContext): void {
         ),
       ),
     'deepseek-web-login: settings page',
+  )
+
+  /**
+   * 内置浏览器 guest 的宿主槽位。
+   *
+   * 单独挂 `shell.overlay`（root scope）是为了**永不卸载** —— guest 的 `<webview>`
+   * 一旦被摘下来再插回去就会重新加载，而这个页面的全部价值就是"一直活着"。
+   * 拿不到这个槽位（不同 DSH 版本）时**只降级**：设置页里照旧能看状态，只是没有浏览器面板，
+   * 所以这里必须 try/catch —— 不能让一个可选能力把整个插件带崩。
+   */
+  ctx.effect(
+    () => {
+      try {
+        return ctx.slots.inject('shell.overlay', () =>
+          ctx.slots.register({ name: 'shell.overlay', id: 'deepseek-web-login-guest' }, () =>
+            createElement(GuestHost),
+          ),
+        )
+      } catch (error) {
+        console.warn('[deepseek-web] shell.overlay 槽位不可用，内置浏览器面板将不可用：', error)
+        return undefined
+      }
+    },
+    'deepseek-web-login: guest browser host',
   )
 }
