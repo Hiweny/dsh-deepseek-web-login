@@ -20,6 +20,7 @@ import {
   buildGuestUserAgent,
   guestFingerprintFix,
   guestProbeExpression,
+  guestSessionFromObservation,
   needsViewportFix,
   type GuestBeat,
   type GuestBeatState,
@@ -476,6 +477,8 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
         ...(status.note ? { note: status.note } : {}),
         // 🔴 把页面眼里的环境一起带回去（host 落盘对账）：弹不弹「使用环境异常」
         //    只有页面自己知道，凭这里的 ua/webdriver/brands/webgl 对账，不猜。
+        // 🔴 登录态必须在**顶层**（host 只读 `session`）；放进 fingerprint 里等于没发
+        ...(guestSessionFromObservation(observed)),
         ...(observed
           ? {
               fingerprint: {
@@ -487,33 +490,6 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
                 vw: Number((observed as Record<string, unknown>).vw ?? 0),
                 vh: Number((observed as Record<string, unknown>).vh ?? 0),
                 dpr: String((observed as Record<string, unknown>).dpr ?? ''),
-                // 登录态回读（host 会拿去跟账号库对账；httpOnly cookie 读不到，如实为空）
-                ...(function buildSession() {
-                  const seen2 = observed as Record<string, unknown>
-                  const token = String(seen2.userToken ?? '').trim()
-                  if (!token) return {}
-                  const hif = (seen2.hif ?? {}) as Record<string, unknown>
-                  const info = (seen2.info ?? {}) as Record<string, unknown>
-                  const unwrap = (value: unknown): string => {
-                    const raw = String(value ?? '')
-                    if (!raw) return ''
-                    try {
-                      const parsed = JSON.parse(raw)
-                      return typeof parsed === 'string' ? parsed : raw
-                    } catch {
-                      return raw
-                    }
-                  }
-                  return {
-                    session: {
-                      token,
-                      hifLeim: unwrap(hif.hif_leim_cached).slice(0, 1024),
-                      hifDliq: unwrap(hif.hif_dliq_cached).slice(0, 1024),
-                      userId: String(info.id ?? '').slice(0, 128),
-                      email: String(info.email ?? '').slice(0, 200),
-                    },
-                  }
-                })(),
                 ...(targetRect
                   ? { box: { w: Math.round(targetRect.width), h: Math.round(targetRect.height) } }
                   : {}),

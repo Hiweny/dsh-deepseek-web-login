@@ -25,6 +25,7 @@ import {
   GUEST_BROWSER_URL,
   guestFingerprintFix,
   guestProbeExpression,
+  guestSessionFromObservation,
   needsViewportFix,
   normalizeGuestSettings,
   guestSessionHeaders,
@@ -237,6 +238,56 @@ async function main() {
     assert.ok(host.includes("route === '/browser/settings'"), 'host 必须提供设置读写')
     assert.ok(client.includes("api('/browser/claim-autostart'"), '客户端必须认领后才自动挂')
     assert.ok(/settings\?\.autoStart === false/.test(client), '客户端必须尊重"自动启动"开关')
+  })
+
+  await test('🔴 登录态抽取（纯函数）：解包 hif 头、带身份；没 token 就不发', () => {
+    const got = guestSessionFromObservation({
+      userToken: 'TOK-1',
+      hif: { hif_leim_cached: JSON.stringify('L-1'), hif_dliq_cached: 'D-1' },
+      info: { id: 'uid-1', email: 'a@b.com' },
+    })
+    assert.ok(got.session, '必须抽出 session')
+    assert.equal(got.session.token, 'TOK-1')
+    assert.equal(got.session.hifLeim, 'L-1', 'hif_leim_cached 是 JSON 串，要解包')
+    assert.equal(got.session.hifDliq, 'D-1')
+    assert.equal(got.session.userId, 'uid-1')
+    assert.equal(got.session.email, 'a@b.com')
+    // 未登录 ⇒ 什么都不发（别把空 token 写到账号库）
+    assert.deepEqual(guestSessionFromObservation({ userToken: '', hif: {}, info: {} }), {})
+    assert.deepEqual(guestSessionFromObservation(null), {})
+  })
+
+  await test('🔴 形状契约：session 必须在**顶层**（放进 fingerprint 里 host 读不到 —— 这就是"依旧无效"的根因）', () => {
+    const nested = normalizeGuestBeat({ ...GOOD, fingerprint: { ua: 'x', session: { token: 'T' } } })
+    assert.ok(!nested?.session, '嵌在 fingerprint 里的 session 不算（host 只读顶层）')
+    const top = normalizeGuestBeat({ ...GOOD, session: { token: 'T-9', hifLeim: 'L', hifDliq: '', userId: 'u', email: '' } })
+    assert.equal(top?.session?.token, 'T-9', '顶层 session 必须被收下')
+    /**
+     * 客户端侧用**结构性判据**（括号配平），不看子串：
+     * 上一版的 bug 就是"调用写了、但落在 fingerprint 的花括号里"——
+     * 只查"有没有这行"是查不出来的（子串判据在这里恰好是假绿的典型）。
+     */
+    const guest = readFileSync(fileURLToPath(new URL('../src/client/guest.ts', import.meta.url)), 'utf8')
+    const callAt = guest.indexOf('...(guestSessionFromObservation(observed))')
+    assert.ok(callAt > 0, '客户端必须调用纯函数抽出顶层 session')
+    // 找到包含这次调用的 reportBeat 对象字面量，扫描到调用点为止：
+    // 若此刻仍"处于某个 fingerprint 块内部"，说明又放错了容器
+    const beatStart = guest.lastIndexOf('reportBeat({', callAt)
+    assert.ok(beatStart > 0, '找不到包含该调用的 reportBeat 调用')
+    let depth = 0
+    let fpDepth = -1
+    for (let i = guest.indexOf('{', beatStart); i < callAt; i += 1) {
+      const ch = guest[i]
+      if (ch === '{') {
+        const before = guest.slice(Math.max(0, i - 24), i)
+        depth += 1
+        if (/fingerprint:\s*$/.test(before)) fpDepth = depth
+      } else if (ch === '}') {
+        if (depth === fpDepth) fpDepth = -1
+        depth -= 1
+      }
+    }
+    assert.equal(fpDepth, -1, '🔴 session 必须落在 fingerprint **之外**（顶层）—— 放进里面 host 读不到')
   })
 
   await test('🔴 guest 与传输层共用同一条登录态链（形状不许分叉）', () => {

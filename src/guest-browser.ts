@@ -234,6 +234,41 @@ export function normalizeGuestSettings(raw: unknown): GuestSettings {
 }
 
 /**
+ * 从探针结果里抽出登录态（**给心跳顶层用**）。
+ *
+ * 🔴 为什么单独做成纯函数：这条 payload 有两个容器（顶层 `session` 与 `fingerprint`），
+ * 我第一版就把 session 写进了 `fingerprint` 里面 —— host 只读顶层 ⇒ **同步从未触发**
+ * （用户实测："登录上去之后依旧 API 密钥无效"）。抽出来 + 用例守住形状。
+ */
+export function guestSessionFromObservation(observed: unknown): { session?: GuestSession } {
+  if (!observed || typeof observed !== 'object') return {}
+  const seen = observed as Record<string, unknown>
+  const token = String(seen.userToken ?? '').trim()
+  if (!token) return {}
+  const hif = (seen.hif ?? {}) as Record<string, unknown>
+  const info = (seen.info ?? {}) as Record<string, unknown>
+  const unwrap = (value: unknown): string => {
+    const raw = String(value ?? '')
+    if (!raw) return ''
+    try {
+      const parsed = JSON.parse(raw)
+      return typeof parsed === 'string' ? parsed : raw
+    } catch {
+      return raw
+    }
+  }
+  return {
+    session: {
+      token: token.slice(0, 512),
+      hifLeim: unwrap(hif.hif_leim_cached).slice(0, 1024),
+      hifDliq: unwrap(hif.hif_dliq_cached).slice(0, 1024),
+      userId: String(info.id ?? '').slice(0, 128),
+      email: String(info.email ?? '').slice(0, 200),
+    },
+  }
+}
+
+/**
  * 视口与盒子是否**不一致**（2026-10-15 实测：guest 的视口尺寸是挂载那一刻定下来、
  * 之后容器变大不跟上 —— 落盘证据 `vw=996/box.w=995` 但 `vh=150/box.h=578`，
  * 表现是页面只渲染顶上一条、下面全白、内容被裁）。
