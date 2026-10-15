@@ -458,14 +458,25 @@ const guestBrowser = createGuestBrowser({
 function GuestHost(): any {
   const ref = useRef<any>(null)
   const [rect, setRect] = useState<GuestRect | null>(null)
+  const [running, setRunning] = useState<boolean>(guestBrowser.status().running)
   useEffect(() => {
     registerGuestHost(ref.current ?? null)
-    const off = subscribeGuestRect(setRect)
+    const offRect = subscribeGuestRect(setRect)
+    const offStatus = guestBrowser.subscribe((status) => setRunning(status.running))
+    setRunning(guestBrowser.status().running)
     return () => {
-      off()
+      offRect()
+      offStatus()
       registerGuestHost(null)
     }
   }, [])
+  /**
+   * 🔴 只有 guest **真的在跑**才显示宿主。
+   *
+   * 上一版只要页签可见就显示 —— 那时宿主是个空的白色圆角盒（带边框和阴影），
+   * 正好糊在页签内容上：用户看到的是"一块突出来的白框"，而我自己的启动卡片被它盖住了。
+   */
+  const visible = rect !== null && running
   /**
    * 自校正定位（webin 同款）：期望位置来自占位符的 `getBoundingClientRect()`（视口坐标），
    * 而 `position:fixed` 只有在没有 transform 祖先时才严格等于视口坐标 ⇒ 放好后量一次
@@ -475,7 +486,7 @@ function GuestHost(): any {
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
-    if (!rect) {
+    if (!rect || !running) {
       fixAttempts.current = 0
       return
     }
@@ -491,17 +502,18 @@ function GuestHost(): any {
     el.style.left = `${(parseFloat(el.style.left || '0') || 0) + dx}px`
     el.style.top = `${(parseFloat(el.style.top || '0') || 0) + dy}px`
   })
+  /**
+   * 显示时**不要任何自己的装饰**（边框/阴影/圆角/背景）：它就是页签内容本身，
+   * 有装饰就会像"一块浮在界面上的东西"（用户上一版就是这么说）。
+   */
   const style: Record<string, unknown> = {
     position: 'fixed',
     zIndex: 30,
     overflow: 'hidden',
-    borderRadius: '10px',
-    border: '1px solid var(--dsw-alias-border-l2, #d9d9d9)',
-    background: 'var(--dsw-alias-bg-base, #fff)',
-    boxShadow: '0 8px 28px rgba(0,0,0,.18)',
+    background: 'transparent',
     boxSizing: 'border-box',
   }
-  if (rect) {
+  if (rect && running) {
     Object.assign(style, { left: rect.left, top: rect.top, width: rect.width, height: rect.height, visibility: 'visible' })
   } else {
     // 页签不可见：移出视口 + hidden。**不用 display:none** —— 那会让 webview 停止布局（webin 实测）。
