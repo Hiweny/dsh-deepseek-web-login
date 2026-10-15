@@ -555,45 +555,133 @@ function WebLoginPlaceholder(props?: { sessionId?: string }): any {
     }
   }, [])
   void props?.sessionId
+  ensurePanelStyles()
   const running = status?.running === true
+  const busy = status?.state === 'idle' && (status?.beats ?? 0) === 0 && status?.error === undefined
+    ? false
+    : status?.running === true
+  const stateText = !running
+    ? '未启动'
+    : status?.state === 'alive'
+      ? '保活中'
+      : status?.state === 'logged-out'
+        ? '页面未登录（会重装）'
+        : status?.state === 'off-origin'
+          ? '页面被导航走（会带回）'
+          : '探测不到页面'
   const children: any[] = []
   if (!running) {
     children.push(
       createElement(
         'div',
         {
-          key: 'hint',
-          style: { color: 'var(--dsw-alias-fg-muted, #888)', textAlign: 'center', maxWidth: '420px', lineHeight: 1.7 },
-        },
-        '内置浏览器未启动 —— 启动后这里就是网页端本体（登录状态由插件保活，站点自己的 JS 在跑）。',
-      ),
-      createElement(
-        'button',
-        {
-          key: 'start',
-          type: 'button',
-          className: 'dsw-btn',
-          onClick: () => {
-            void guestBrowser.start()
+          key: 'card',
+          style: {
+            width: 'min(560px, 86%)',
+            padding: '22px 24px',
+            borderRadius: '14px',
+            border: '1px solid var(--dsw-alias-border-l2, #e2e2e2)',
+            background: 'var(--dsw-alias-bg-l2, #fafafa)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '12px',
           },
         },
-        '启动内置浏览器',
+        createElement(
+          'div',
+          { key: 'title', style: { fontSize: '15px', fontWeight: 600, color: 'var(--dsw-alias-fg-base, #222)' } },
+          '网页版（内置浏览器）',
+        ),
+        createElement(
+          'div',
+          {
+            key: 'desc',
+            style: { fontSize: '12px', lineHeight: 1.9, color: 'var(--dsw-alias-fg-muted, #777)' },
+          },
+          '在这里登录网页端并保持登录态 —— 站点自己的 JS 会一直跑（插件负责保活）。' +
+            '发送仍走原有通路，网页端的回答不会回显到这里。',
+        ),
+        createElement(
+          'div',
+          { key: 'actions', style: { display: 'flex', gap: '8px', marginTop: '2px' } },
+          createElement(
+            'button',
+            {
+              key: 'start',
+              type: 'button',
+              className: 'dsw-btn',
+              onClick: () => {
+                void guestBrowser.start()
+              },
+            },
+            '启动内置浏览器',
+          ),
+        ),
+        status?.error
+          ? createElement(
+              'div',
+              {
+                key: 'err',
+                style: {
+                  fontSize: '12px',
+                  lineHeight: 1.8,
+                  padding: '8px 10px',
+                  borderRadius: '8px',
+                  color: '#b3261e',
+                  background: 'rgba(179,38,30,.08)',
+                },
+              },
+              status.error,
+            )
+          : createElement(
+              'div',
+              { key: 'tip', style: { fontSize: '12px', color: 'var(--dsw-alias-fg-muted, #999)' } },
+              '首次启动会向 DSH 桌面端申请一个内置浏览器。',
+            ),
       ),
+    )
+  } else {
+    children.push(
       createElement(
         'div',
         {
-          key: 'note',
-          style: { color: 'var(--dsw-alias-fg-muted, #888)', fontSize: '12px', textAlign: 'center', maxWidth: '420px' },
+          key: 'bar',
+          style: {
+            position: 'absolute',
+            top: '6px',
+            right: '10px',
+            zIndex: 2,
+            display: 'flex',
+            gap: '6px',
+            alignItems: 'center',
+            fontSize: '11px',
+            color: 'var(--dsw-alias-fg-muted, #888)',
+          },
         },
-        status?.error ?? '首次启动需要 DSH 桌面端提供内置浏览器通道；拿不到时这里会说明原因。',
+        stateText,
+        createElement(
+          'button',
+          {
+            key: 'stop',
+            type: 'button',
+            className: 'dsw-btn ghost',
+            style: { fontSize: '11px', padding: '2px 8px' },
+            onClick: () => {
+              void guestBrowser.stop()
+            },
+          },
+          '关闭',
+        ),
       ),
     )
   }
+  void busy
   return createElement(
     'div',
     {
       ref,
       style: {
+        position: 'relative',
         width: '100%',
         height: '100%',
         display: 'flex',
@@ -607,6 +695,27 @@ function WebLoginPlaceholder(props?: { sessionId?: string }): any {
   )
 }
 
+let panelStylesInjected = false
+
+/**
+ * 注入面板样式表（幂等）。
+ *
+ * 🔴 不能只在设置页的 effect 里注入：`conversation.view` 的页签可能在用户**从没打开过设置页**
+ * 的情况下先渲染 —— 那时页签就没样式（按钮是裸的、字号是默认的）。
+ */
+function ensurePanelStyles(): void {
+  if (panelStylesInjected || typeof document === 'undefined') return
+  if (document.getElementById('dsh-deepseek-web-login-styles')) {
+    panelStylesInjected = true
+    return
+  }
+  const style = document.createElement('style')
+  style.id = 'dsh-deepseek-web-login-styles'
+  style.textContent = styles
+  document.head.appendChild(style)
+  panelStylesInjected = true
+}
+
 /** 面板本体：命令式 DOM（生态既有插件同款做法），挂在 React 容器里。 */
 function Panel(): any {
   const hostRef = useRef<HTMLDivElement | null>(null)
@@ -617,8 +726,7 @@ function Panel(): any {
     let disposed = false
     let timer: number | undefined
 
-    const style = document.createElement('style')
-    style.textContent = styles
+    ensurePanelStyles()
 
     const page = el('div', 'dsw-page')
     const title = el('h3', 'dsw-title', 'DeepSeek 网页登录（免费模型）')
@@ -633,7 +741,7 @@ function Panel(): any {
     sub.append(el('span', 'dsw-nobreak', 'deepseek-web'))
     sub.append('）')
 
-    page.append(style, title, sub)
+    page.append(title, sub)
 
     // ── 操作反馈：常驻在标签栏之上 ──────────────────────────────
     // 拆成标签页后，在「账号」页点按钮的反馈若落在别的页里就等于看不见，所以它不归属任何一页。

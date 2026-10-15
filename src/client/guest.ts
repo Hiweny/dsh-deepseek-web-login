@@ -201,18 +201,34 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
     return true
   }
 
+  /** 失败也要留痕：面板报错只在界面上，截图排不动问题（host 会落盘）。 */
+  async function reportFailure(reason: string): Promise<void> {
+    emit({ running: false, error: reason })
+    try {
+      await deps.reportBeat({
+        state: 'dead',
+        at: now(),
+        url: '',
+        beats: status.beats + 1,
+        recoveries: status.recoveries,
+        note: reason,
+      })
+    } catch {
+      /* 留痕失败不影响主流程 */
+    }
+  }
+
   async function attach(): Promise<boolean> {
     const carrier = bridge()
     if (!carrier) {
-      emit({
-        running: false,
-        error: '本环境没有内置浏览器通道（需要 DSH 桌面端主窗口；仅在设置页里看不到它）',
-      })
+      await reportFailure(
+        '本环境没有内置浏览器通道（主窗口 globalThis.dshDesktop.browser 不存在或 protocolVersion≠1）',
+      )
       return false
     }
     const node = hostNode
     if (!node) {
-      emit({ running: false, error: '浏览器宿主节点还没挂上（打开设置页后重试）' })
+      await reportFailure('浏览器宿主节点还没挂上（shell.overlay 未渲染）')
       return false
     }
     const reservation = await carrier.acquire(deps.workspace ?? 'deepseek-web-login')
@@ -230,8 +246,10 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
       String(session?.userAgent ?? '').trim() || buildGuestUserAgent(navigator.userAgent)
     const created = document.createElement('webview') as GuestElement
     // 门禁要求：partition 用 acquire 给的；src 必须**精确**是 about:blank#<lease>
+    created.setAttribute('name', reservation.lease)
     created.setAttribute('partition', reservation.partition)
     created.setAttribute('useragent', pageUa)
+    created.setAttribute('allowpopups', '')
     created.setAttribute('src', `about:blank#${reservation.lease}`)
     created.style.width = '100%'
     created.style.height = '100%'
@@ -347,8 +365,8 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
   return {
     async start() {
       if (status.running) return { ...status }
-      const ok = await attach().catch((error) => {
-        emit({ running: false, error: String((error as Error)?.message ?? error) })
+      const ok = await attach().catch(async (error) => {
+        await reportFailure(`启动失败：${String((error as Error)?.message ?? error)}`)
         return false
       })
       if (ok) schedule()

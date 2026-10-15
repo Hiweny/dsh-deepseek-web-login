@@ -284,6 +284,7 @@ let accountsRefreshInFlight = false
 let guestBeat: GuestBeat | null = null
 /** 上一次落盘的指纹（变化才写，避免每分钟心跳灌爆诊断文件）。 */
 let lastGuestFingerprintLine = ''
+let lastGuestErrorLine = ''
 
 export function apply(ctx: any, config: Config = {}): void {
   const logger = normalizeLogger(ctx.logger)
@@ -1541,6 +1542,23 @@ export function apply(ctx: any, config: Config = {}): void {
               guestBeat = beat
               // 🔴 指纹落盘（变化才写）：「使用环境异常」弹不弹只有页面自己知道，
               //    host 没有运行日志（logs/ 只有 crash），不落盘就永远对不了账。
+              // 非正常状态的心跳（含面板侧启动失败的具体原因）单独留痕 ——
+              // 面板上的报错只有用户看得见，排不动问题；落盘之后一条命令就能查。
+              // ⚠️ 用户明确要求过「不要过程文档」，所以这与 guest-fingerprint 一样是**诊断数据**，
+              //    不是给人看的报告；只在状态/原因变化时写一行。
+              if (beat.state !== 'alive' || beat.note) {
+                const line = JSON.stringify({ at: new Date().toISOString(), state: beat.state, note: beat.note ?? '', url: beat.url })
+                if (line !== lastGuestErrorLine) {
+                  try {
+                    const dir = join(webLoginDir(), 'diagnostics')
+                    mkdirSync(dir, { recursive: true })
+                    appendFileSync(join(dir, 'guest-errors.jsonl'), line + '\n', 'utf8')
+                    lastGuestErrorLine = line
+                  } catch {
+                    /* 诊断留痕失败不影响主流程 */
+                  }
+                }
+              }
               const fp = beat.fingerprint
               if (fp) {
                 const line = JSON.stringify({ at: new Date().toISOString(), ...fp })
