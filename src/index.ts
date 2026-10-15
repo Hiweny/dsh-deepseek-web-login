@@ -11,7 +11,8 @@
  */
 import { maskIdentifier, readAuth, refreshVerifiedIdentity, withVerifiedIdentity, writeAuth, type WebAuth } from './auth.ts'
 import { createRequire } from 'node:module'
-import { readFileSync, statSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 import { PROVIDER, createAdapter, describeAuth, MODEL_SPECS, type AdapterConfig } from './adapter.ts'
 import {
   createRequestGate,
@@ -281,6 +282,8 @@ let accountsRefreshInFlight = false
  * 面板是不可信输入，形状不对就整条丢掉（见 `normalizeGuestBeat`）。
  */
 let guestBeat: GuestBeat | null = null
+/** 上一次落盘的指纹（变化才写，避免每分钟心跳灌爆诊断文件）。 */
+let lastGuestFingerprintLine = ''
 
 export function apply(ctx: any, config: Config = {}): void {
   const logger = normalizeLogger(ctx.logger)
@@ -1536,6 +1539,22 @@ export function apply(ctx: any, config: Config = {}): void {
                 return
               }
               guestBeat = beat
+              // 🔴 指纹落盘（变化才写）：「使用环境异常」弹不弹只有页面自己知道，
+              //    host 没有运行日志（logs/ 只有 crash），不落盘就永远对不了账。
+              const fp = beat.fingerprint
+              if (fp) {
+                const line = JSON.stringify({ at: new Date().toISOString(), ...fp })
+                if (line !== lastGuestFingerprintLine) {
+                  try {
+                    const dir = join(webLoginDir(), 'diagnostics')
+                    mkdirSync(dir, { recursive: true })
+                    appendFileSync(join(dir, 'guest-fingerprint.jsonl'), line + '\n', 'utf8')
+                    lastGuestFingerprintLine = line
+                  } catch {
+                    /* 诊断留痕失败不影响主流程 */
+                  }
+                }
+              }
               sendJson(res, 200, { ok: true })
               return
             }

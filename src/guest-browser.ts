@@ -26,6 +26,14 @@ export const GUEST_BROWSER_URL = 'https://chat.deepseek.com/'
 export const GUEST_BEAT_STATES = ['idle', 'alive', 'logged-out', 'off-origin', 'dead'] as const
 export type GuestBeatState = (typeof GUEST_BEAT_STATES)[number]
 
+export interface GuestFingerprint {
+  /** 页面自己的 `navigator.userAgent`（判定 Electron/Headless 痕迹用） */
+  ua: string
+  webdriver: boolean
+  brands: string
+  webgl: string
+}
+
 export interface GuestBeat {
   state: GuestBeatState
   /** 面板侧探测时刻（ms） */
@@ -38,6 +46,11 @@ export interface GuestBeat {
   recoveries: number
   /** 说明（异常时给排查用） */
   note?: string
+  /**
+   * 页面眼里的环境（探针顺带带回）。🔴 落盘到 `diagnostics/guest-fingerprint.jsonl`
+   * —— 网页端弹不弹「使用环境异常」只有页面自己知道，**凭这个对账，不猜**。
+   */
+  fingerprint?: GuestFingerprint
 }
 
 const MAX_NOTE = 300
@@ -61,6 +74,18 @@ export function normalizeGuestBeat(raw: unknown): GuestBeat | null {
   const recoveries = Number(input.recoveries)
   const url = typeof input.url === 'string' ? input.url.slice(0, MAX_URL) : ''
   const note = typeof input.note === 'string' && input.note.trim() ? input.note.slice(0, MAX_NOTE) : undefined
+  let fingerprint: GuestFingerprint | undefined
+  const fp = input.fingerprint
+  if (fp && typeof fp === 'object') {
+    const raw = fp as Record<string, unknown>
+    const ua = typeof raw.ua === 'string' ? raw.ua.slice(0, 400) : ''
+    const brands = typeof raw.brands === 'string' ? raw.brands.slice(0, 200) : ''
+    const webgl = typeof raw.webgl === 'string' ? raw.webgl.slice(0, 200) : ''
+    const webdriver = raw.webdriver === true
+    if (ua || brands || webgl || webdriver) {
+      fingerprint = { ua, webdriver, brands, webgl }
+    }
+  }
   return {
     state: state as GuestBeatState,
     at,
@@ -68,6 +93,7 @@ export function normalizeGuestBeat(raw: unknown): GuestBeat | null {
     beats: Number.isFinite(beats) && beats >= 0 ? Math.floor(beats) : 0,
     recoveries: Number.isFinite(recoveries) && recoveries >= 0 ? Math.floor(recoveries) : 0,
     ...(note ? { note } : {}),
+    ...(fingerprint ? { fingerprint } : {}),
   }
 }
 
@@ -85,9 +111,16 @@ export function guestProbeExpression(): string {
     "var raw=localStorage.getItem('userToken');" +
     'var t=raw;' +
     "try{var p=JSON.parse(raw);if(p&&typeof p==='object')t=p.value;}catch(e){}" +
+    'var brands=(navigator.userAgentData&&navigator.userAgentData.brands||[])' +
+    '.map(function(b){return b.brand;}).join(",");' +
+    'var webgl="";' +
+    'try{var c=document.createElement("canvas");var g=c.getContext("webgl");' +
+    'var d=g.getExtension("WEBGL_debug_renderer_info");' +
+    'webgl=String(g.getParameter(d.UNMASKED_RENDERER_WEBGL));}catch(e){}' +
     'return JSON.stringify({url:location.href,readyState:document.readyState,' +
-    "userToken:(t===null||t===undefined)?'':String(t)});" +
-    "}catch(e){return JSON.stringify({url:location.href,readyState:'',userToken:''});}})()"
+    "userToken:(t===null||t===undefined)?'':String(t)," +
+    'webdriver:navigator.webdriver===true,uaDataBrands:brands,webgl:webgl});' +
+    "}catch(e){return JSON.stringify({url:location.href,readyState:'',userToken:'',webdriver:false,uaDataBrands:'',webgl:''});}})()"
   )
 }
 

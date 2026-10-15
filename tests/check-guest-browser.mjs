@@ -50,9 +50,10 @@ function runProbe(env) {
     'location',
     'document',
     'localStorage',
+    'navigator',
     `return ${expr}`,
   )
-  return JSON.parse(fn(env.location, env.document, env.localStorage))
+  return JSON.parse(fn(env.location, env.document, env.localStorage, env.navigator ?? { webdriver: false, userAgentData: { brands: [] } }))
 }
 
 async function main() {
@@ -133,6 +134,38 @@ async function main() {
     })
     assert.equal(broken.userToken, '')
     assert.ok(broken.url.includes('deepseek.com'), '出错了也要把 url 带回来（排查要用）')
+  })
+
+  await test('探针真求值：指纹三件套随心跳带回（Electron 品牌一眼可见）', () => {
+    const seen = runProbe({
+      location: { href: 'https://chat.deepseek.com/' },
+      document: { readyState: 'complete' },
+      localStorage: { getItem: () => 'T' },
+      navigator: {
+        webdriver: true,
+        userAgentData: { brands: [{ brand: 'Electron' }, { brand: 'Chromium' }] },
+      },
+    })
+    assert.equal(seen.webdriver, true, '页面里的 webdriver 必须如实带回')
+    assert.ok(String(seen.uaDataBrands).includes('Electron'), `品牌要带回：${seen.uaDataBrands}`)
+    assert.equal(seen.webgl, '', '假环境里 canvas 无 webgl ⇒ 空串而不是崩')
+  })
+
+  await test('心跳形状：fingerprint 字段收窄（非对象丢弃、字符串截断、webdriver 只认 true）', () => {
+    const beat = normalizeGuestBeat({
+      ...GOOD,
+      fingerprint: { ua: 'u'.repeat(800), webdriver: true, brands: 'b'.repeat(500), webgl: 'w'.repeat(500) },
+    })
+    assert.ok(beat?.fingerprint, '合法指纹要保留')
+    assert.equal(beat.fingerprint.ua.length, 400)
+    assert.equal(beat.fingerprint.webdriver, true)
+    assert.equal(beat.fingerprint.brands.length, 200)
+    const dropped = normalizeGuestBeat({ ...GOOD, fingerprint: 'ua' })
+    assert.ok(dropped, '🔴 指纹形状不对只丢指纹，不丢整条心跳')
+    assert.ok(!('fingerprint' in (dropped ?? {})), '坏的指纹要被丢掉')
+    const noWd = normalizeGuestBeat({ ...GOOD, fingerprint: { ua: 'x', webdriver: 'yes' } })
+    assert.equal(noWd?.fingerprint?.webdriver, false, 'webdriver 只认布尔 true')
+    assert.ok(!('fingerprint' in (normalizeGuestBeat(GOOD) ?? {})), '没报指纹就不该有该字段')
   })
 
   await test('🔴 guest 与传输层共用同一条登录态链（形状不许分叉）', () => {

@@ -217,30 +217,35 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
     }
     const reservation = await carrier.acquire(deps.workspace ?? 'deepseek-web-login')
     lease = reservation.lease
+    /**
+     * 🔴 会话与 UA 必须在**创建/挂载元素之前**拿。
+     *
+     * `useragent` 属性只在**挂载/导航前**被读取 —— 挂载之后再设等于没设。
+     * 上一版就栽在这里：页面带着 `Electron/` UA 出去，网页端直接回「使用环境异常」。
+     * （dsh-webin 的注释原文：「useragent 属性在导航之前生效 —— 不能等 dom-ready
+     *   再用 setUserAgent，否则第一次请求已经带着 Electron UA 出去了」。）
+     */
+    const session = await deps.fetchSession()
+    const pageUa =
+      String(session?.userAgent ?? '').trim() || buildGuestUserAgent(navigator.userAgent)
     const created = document.createElement('webview') as GuestElement
     // 门禁要求：partition 用 acquire 给的；src 必须**精确**是 about:blank#<lease>
     created.setAttribute('partition', reservation.partition)
+    created.setAttribute('useragent', pageUa)
     created.setAttribute('src', `about:blank#${reservation.lease}`)
     created.style.width = '100%'
     created.style.height = '100%'
     created.style.border = '0'
     created.style.display = 'block'
+    // 主世界指纹修正（webdriver=false / userAgentData 品牌）—— 监听要在 append **之前**注册，
+    // 否则第一次 dom-ready（约 blank）之后的站点 dom-ready 也可能错过
+    created.addEventListener('dom-ready', () => {
+      void created.executeJavaScript(guestFingerprintFix(pageUa)).catch(() => {})
+    })
     node.appendChild(created)
     element = created
     const ready = await waitEvent(created, 'dom-ready', 20_000)
     if (!ready) log('guest：dom-ready 等超时（继续试）')
-
-    // UA 必须在**第一次导航到站点之前**设好，否则站点看到的是带 Electron 痕迹的 UA
-    // ⇒ 网页端看到 `Electron/` 直接回「使用环境异常」（dsh-webin 同款结论）。
-    // 优先用账号捕获的那份真实 UA；没有就用"剔除 Electron 的内核 UA"兜底 —— 反正不能裸奔。
-    const session = await deps.fetchSession()
-    const pageUa =
-      String(session?.userAgent ?? '').trim() || buildGuestUserAgent(navigator.userAgent)
-    created.setAttribute('useragent', pageUa)
-    // 主世界指纹修正（webdriver=false / userAgentData 品牌）—— 每次 dom-ready 都补一次
-    created.addEventListener('dom-ready', () => {
-      void created.executeJavaScript(guestFingerprintFix(pageUa)).catch(() => {})
-    })
     await created.loadURL(GUEST_BROWSER_URL).catch((error) => {
       log(`guest：导航失败 ${String(error)}`)
     })
@@ -320,6 +325,18 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
         beats: status.beats,
         recoveries: status.recoveries,
         ...(status.note ? { note: status.note } : {}),
+        // 🔴 把页面眼里的环境一起带回去（host 落盘对账）：弹不弹「使用环境异常」
+        //    只有页面自己知道，凭这里的 ua/webdriver/brands/webgl 对账，不猜。
+        ...(observed
+          ? {
+              fingerprint: {
+                ua: String((observed as Record<string, unknown>).ua ?? ''),
+                webdriver: (observed as Record<string, unknown>).webdriver === true,
+                brands: String((observed as Record<string, unknown>).uaDataBrands ?? ''),
+                webgl: String((observed as Record<string, unknown>).webgl ?? ''),
+              },
+            }
+          : {}),
       })
       return { ...status }
     } finally {
