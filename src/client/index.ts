@@ -460,14 +460,13 @@ function GuestHost(): any {
   const [rect, setRect] = useState<GuestRect | null>(null)
   const [running, setRunning] = useState<boolean>(guestBrowser.status().running)
   useEffect(() => {
-    registerGuestHost(ref.current ?? null)
+    // 宿主节点由内层 guest 包装的 ref 回调登记（webview 要挂在那一层，不是外层）
     const offRect = subscribeGuestRect(setRect)
     const offStatus = guestBrowser.subscribe((status) => setRunning(status.running))
     setRunning(guestBrowser.status().running)
     return () => {
       offRect()
       offStatus()
-      registerGuestHost(null)
     }
   }, [])
   /**
@@ -519,7 +518,21 @@ function GuestHost(): any {
     // 页签不可见：移出视口 + hidden。**不用 display:none** —— 那会让 webview 停止布局（webin 实测）。
     Object.assign(style, { left: '-99999px', top: '-99999px', width: '420px', height: '620px', visibility: 'hidden' })
   }
-  return createElement('div', { ref, id: 'dsh-deepseek-guest-host', style })
+  /**
+   * 结构**照抄 dsh-webin**：
+   *   外层 host：fixed + flex column（`...box` 就是量出来的矩形）
+   *   内层 guest 包装：`flex:auto; min-height:0; display:flex` ← webview 挂在这里
+   * `min-height:0` 是关键：不给它，flex 子项的最小高度会撑住内容、webview 拿不到剩余高度。
+   */
+  return createElement(
+    'div',
+    { ref, id: 'dsh-deepseek-guest-host', style: { ...style, display: 'flex', flexDirection: 'column' } },
+    createElement('div', {
+      key: 'guest',
+      ref: (node: HTMLDivElement | null) => registerGuestHost(node),
+      style: { flex: 'auto', minHeight: 0, display: 'flex' },
+    }),
+  )
 }
 
 /**

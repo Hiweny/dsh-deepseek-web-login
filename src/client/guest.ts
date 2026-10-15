@@ -128,13 +128,12 @@ export function publishGuestRect(rect: GuestRect | null): void {
 function syncElementSize(): void {
   const el = activeElement
   if (!el || !targetRect) return
-  const w = Math.round(targetRect.width)
-  const h = Math.round(targetRect.height)
-  if (w <= 0 || h <= 0) return
-  if (el.style.width === `${w}px` && el.style.height === `${h}px`) return
-  el.style.width = `${w}px`
-  el.style.height = `${h}px`
-  // 让 guest 内的页面知道视口变了（布局/媒体查询才会重算）
+  if (targetRect.width <= 0 || targetRect.height <= 0) return
+  // 尺寸靠 100% 跟容器走（同 webin）；这里只保证显示方式没被写坏，
+  // 再让页面知道视口变了（布局/媒体查询才会重算）
+  el.style.width = '100%'
+  el.style.height = '100%'
+  el.style.display = 'flex'
   void el.executeJavaScript('window.dispatchEvent(new Event("resize"))').catch(() => {})
 }
 
@@ -292,12 +291,18 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
     created.setAttribute('useragent', pageUa)
     created.setAttribute('allowpopups', '')
     created.setAttribute('src', `about:blank#${reservation.lease}`)
-    // 尺寸**按像素**给（不是 100%）：见 syncElementSize 的注释 ——
-    // guest 的视口只认挂载那一刻的尺寸，CSS 百分比在容器变化时不会让它重新布局
-    created.style.width = `${Math.round(targetRect?.width ?? 0) || 1}px`
-    created.style.height = `${Math.round(targetRect?.height ?? 0) || 1}px`
+    /**
+     * 尺寸/显示方式**照抄 dsh-webin**（这是踩过坑的写法）：
+     *   `width:100%; height:100%; display:flex; border:0`
+     *
+     * 🔴 我先前写成 `display:block` —— Electron 的 `<webview>` 内部是个 iframe，
+     * 它靠父级的 flex 拉伸；改成 block 之后 iframe 拿不到高度，**回落到默认 150px**
+     * （落盘证据 `vh=150`）。这就是"只渲染顶上一条、下面全白"的真凶。
+     */
+    created.style.width = '100%'
+    created.style.height = '100%'
+    created.style.display = 'flex'
     created.style.border = '0'
-    created.style.display = 'block'
     // 主世界指纹修正（webdriver=false / userAgentData 品牌）—— 监听要在 append **之前**注册，
     // 否则第一次 dom-ready（约 blank）之后的站点 dom-ready 也可能错过
     created.addEventListener('dom-ready', () => {
