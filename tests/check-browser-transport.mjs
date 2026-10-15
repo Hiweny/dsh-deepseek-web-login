@@ -243,6 +243,38 @@ async function main() {
     )
   })
 
+  // 8. 🔴 页面 JS 眼里的环境不能是"自动化指纹"（2026-10-15 实测：站点弹「使用环境异常」，
+  //    CDP 探针读到的三个实锤：UA=HeadlessChrome、webdriver=true、WebGL=软件渲染）
+  await test('传输层页面的 UA / webdriver / WebGL 不许是自动化指纹', async () => {
+    const { transportBrowserArgs } = await import(
+      '../src/browser-transport.ts?args-fp=' + Date.now()
+    )
+    const realUa = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0'
+    const args = transportBrowserArgs('/tmp/fp-profile', realUa)
+    assert.ok(
+      args.includes(`--user-agent=${realUa}`),
+      `页面 UA 必须用账号捕获的那份真实 UA（与请求头一致）。实际：${JSON.stringify(args)}`,
+    )
+    assert.ok(
+      args.includes('--disable-blink-features=AutomationControlled'),
+      'navigator.webdriver 必须回到 false（headless 自己会把它置 true）',
+    )
+    assert.ok(
+      !args.includes('--disable-gpu'),
+      '--disable-gpu 会把 WebGL 逼成软件渲染（Basic Render Driver）—— 那是 headless 的经典指纹',
+    )
+    assert.ok(
+      !args.some((a) => a.startsWith('--user-agent=') && /Headless/i.test(a)),
+      'UA 里不许出现 Headless 字样',
+    )
+    // 没有真实 UA 就宁可不传 —— 编一个"看起来像 Edge"的比留空更假
+    const bare = transportBrowserArgs('/tmp/fp-profile-2')
+    assert.ok(
+      !bare.some((a) => a.startsWith('--user-agent=')),
+      '没有账号 UA 时不该传 --user-agent（不许编造）',
+    )
+  })
+
   // 8. 禁止头必须被剥掉（交给页面 fetch 会被静默丢弃）
   await test('禁止头被剥离：cookie/origin/referer 不交给页面 fetch', async () => {
     const { splitBrowserFetchHeaders } = await import('../src/browser-transport.ts?headers=' + Date.now())

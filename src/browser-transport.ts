@@ -27,6 +27,7 @@ import {
   runPageSessionInstall,
   type PageSessionSlot,
 } from './page-session.ts'
+import { activeAccountId, listAccounts } from './accounts.ts'
 import type { PageObservation } from './transport-heartbeat.ts'
 
 /** 暴露给测试/诊断：找系统浏览器。 */
@@ -434,19 +435,53 @@ export async function installCookiesViaCdp(
  *     登录窗口要加载真实页面、用户在里面手动输密码，关它的 sandbox 才是真的扩大攻击面。
  *     理由详见 `browser-login.ts: transportExtraArgs()` 的注释。
  */
-export function transportBrowserArgs(profileDir: string): string[] {
+export function transportBrowserArgs(profileDir: string, userAgent?: string): string[] {
   return [
     ...buildBrowserArgs(profileDir, `${TRANSPORT_SITE_ORIGIN}/`),
     ...transportExtraArgs(),
     '--headless=new',
-    '--disable-gpu',
     '--disable-dev-shm-usage',
     '--allow-insecure-localhost',
+    /**
+     * 🔴 2026-10-15 实测（CDP 探针读**页面 JS 眼里**的环境，站点弹「使用环境异常」），
+     * 三个实锤与对策：
+     *
+     *  ① UA 是 `HeadlessChrome/…`，而请求头带的是账号那份真实 Edge UA —— 自相矛盾
+     *     ⇒ `--user-agent` 用**账号捕获的那份真实 UA**（见 `launchBrowserTransport`）；
+     *  ② `navigator.webdriver === true`（headless 自己带来的）
+     *     ⇒ `--disable-blink-features=AutomationControlled`；
+     *  ③ WebGL 渲染器是 `Microsoft Basic Render Driver`（`--disable-gpu` 逼出来的软件渲染）
+     *     ⇒ **拿掉 `--disable-gpu`**（headless=new 在有 GPU 的机器上会用真 GPU；
+     *        没 GPU 的环境 Chrome 会自己回退，不需要我们替它决定）。
+     *
+     * 仓库其实早知道这个病：`check-browser-login.mjs` 对登录窗口的断言原文就是
+     * 「否则 UA 是 HeadlessChrome 且 webdriver=true」—— 传输层得了同样的病没人管。
+     * ⚠️ `--disable-web-security` 先留着 —— 见下面注释（拿掉有打不开站点的风险，单独评估）。
+     */
+    '--disable-blink-features=AutomationControlled',
     // ⚠️ 这一条在"页面站对 origin"之后已经不是必需（同源请求本就不触发 CORS），
     // 但它**不改变 JS 可见的指纹**，而拿掉它有打不开站点的风险 ⇒ 暂时留着、单独评估。
     '--disable-web-security',
     '--disable-features=IsolateOrigins,site-per-process',
+    ...(userAgent ? [`--user-agent=${userAgent}`] : []),
   ]
+}
+
+/**
+ * 传输层页面的 UA：**当前账号捕获的那份真实 UA**（与请求头里的完全一致）。
+ *
+ * 为什么不给兜底值：编一个"看起来像 Edge"的 UA 比留空更假 —— 留空时页面还是 Headless UA
+ * （会被站点看见），但那种状态本来就发不出请求（没有账号就没有请求）。
+ */
+function transportPageUserAgent(): string | undefined {
+  try {
+    const id = activeAccountId()
+    const account = id ? listAccounts().find((item) => item.id === id) : undefined
+    const ua = String(account?.userAgent ?? '').trim()
+    return ua || undefined
+  } catch {
+    return undefined
+  }
 }
 
 export async function launchBrowserTransport(): Promise<BrowserTransportSession> {
@@ -466,7 +501,7 @@ export async function launchBrowserTransport(): Promise<BrowserTransportSession>
 
     const child = spawn(
       browser.path,
-      transportBrowserArgs(PROFILE_DIR),
+      transportBrowserArgs(PROFILE_DIR, transportPageUserAgent()),
       {
         stdio: 'ignore',
         detached: false,
