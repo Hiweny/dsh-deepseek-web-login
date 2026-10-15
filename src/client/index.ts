@@ -117,6 +117,8 @@ const styles = `
 --fg3:var(--dsw-alias-label-tertiary,var(--fb-fg3));
 --bg1:var(--dsw-alias-bg-layer-1,var(--fb-bg1));
 --bg2:var(--dsw-alias-bg-layer-2,var(--fb-bg2));
+/* bg3：最亮的一档，玻璃面的基色（宿主缺 layer-3 时退回 layer-2）。 */
+--bg3:var(--dsw-alias-bg-layer-3,var(--dsw-alias-bg-layer-2,var(--fb-bg2)));
 --bd:var(--dsw-alias-border-l1,var(--fb-bd));
 --bd2:var(--dsw-alias-border-l2,var(--fb-bd2));
 --hover:var(--dsw-alias-interactive-bg-hover,var(--fb-hover));
@@ -130,11 +132,24 @@ const styles = `
 /* ── 尺度层 ──────────────────────────────────────────────────────────
    改造前的问题：fontSize 有 5 档（11/12/12.5/13/14）、圆角 6 档（6/8/10/12/999）、
    间距散落 7 种值（2/4/6/8/9/10/12）。同一个界面里数字一多，眼睛就觉得"乱"却
-   说不出哪乱 —— 所以先把尺度收敛，下面所有组件只能引用这里的变量。 */
---r-lg:12px;   /* 卡片等容器 */
---r-md:8px;    /* 按钮 / 输入框 */
---r-sm:6px;    /* 小组件（备注输入、归组下拉） */
+   说不出哪乱 —— 所以先把尺度收敛，下面所有组件只能引用这里的变量。
+
+   圆角档位对齐 Our Free Model（卡片 16 / 按钮 9 / 胶囊 999）：它的卡片比我们原来
+   的 12px 更圆，按钮 9px 比 8px 略钝 —— 这套比例让"容器"和"控件"一眼分得开。 */
+--r-lg:16px;   /* 卡片等容器 */
+--r-md:9px;    /* 按钮 / 输入框 */
+--r-sm:7px;    /* 小组件（备注输入、归组下拉） */
+--r-pill:999px;/* 胶囊：标签、开关轨道、进度条 */
 --sp-1:4px;--sp-2:8px;--sp-3:12px;--sp-4:16px;--sp-5:20px;
+/* ── 动效曲线（借 Our Free Model 的两条）──────────────────────────────
+   ease-instrument：快出慢停，用于悬停 / 聚焦 / 展开这类"响应操作"的过渡；
+   ease-settle：末端轻微过冲，用于"落定"的反馈（开关、选中态切换）。
+   两条曲线比默认 ease 更有"机械感"，且不改变任何布局 —— 纯观感。 */
+--ease-instrument:cubic-bezier(.16,1,.3,1);
+--ease-settle:cubic-bezier(.34,1.4,.4,1);
+/* 卡片顶部光条的长度衰减：从左端实色渐隐到 78% 处，不铺满整宽 ——
+   铺满会读成"边框的一部分"，渐隐才读成"这层被光打到了"。 */
+--chan-sheen:linear-gradient(90deg,var(--accent),transparent 78%);
 
 /* 状态底色：从语义色现算，不再写死 rgba。
    写死的 rgba 只对其中一档主题成立 —— 按浅色底调出来的那组绿/橙/红贴到深色底上会发脏。 */
@@ -143,6 +158,14 @@ const styles = `
 --err-weak:color-mix(in srgb,var(--err) 14%,transparent);
 --accent-weak:color-mix(in srgb,var(--accent) 12%,transparent);
 --accent-hover:color-mix(in srgb,var(--accent) 88%,var(--fg));
+/* ── 玻璃面（借 Our Free Model 的材质语言）──────────────────────────
+   glass：卡片 / 按钮 / 账号行的底 —— 叠一层最亮档再调透明度，让它在任何
+     主题下都比纯色底"有厚度"；78% 是实测下来既能透出背景层次、又不至于
+     让下面的分隔线透上来干扰读字的比例。
+   sheen：内高光 + 极浅外投影。内高光模拟"上边缘受光"，是这套材质的关键
+     —— 没有它，玻璃面和纯色块看不出区别。 */
+--glass:color-mix(in srgb,var(--bg3) 78%,transparent);
+--sheen:inset 0 1px 0 rgb(255 255 255 / 5%),0 1px 2px rgb(0 0 0 / 5%);
 
 font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
 font-size:13px;line-height:1.6;color:var(--fg);max-width:760px;padding:2px 0 12px;
@@ -178,16 +201,31 @@ font-size:13px;line-height:1.6;color:var(--fg);max-width:760px;padding:2px 0 12p
 .dsw-badge.err{color:var(--err);background:rgba(217,48,37,.15);background:var(--err-weak)}
 /* 中性信息标志（邮箱 / 手机号）：不属于状态，别用红黄绿去干扰状态色 */
 .dsw-badge.kind{color:var(--fg);background:var(--code-bg);opacity:.85}
-/* 按钮：hover 不再整体调 opacity —— 那会把文字一起变淡，看着像被禁用了。
-   改成背景微调 + 按下时 1px 位移（物理感）；focus-visible 补上键盘可达性。 */
-.dsw-btn{font:inherit;font-size:12px;font-weight:500;line-height:1.5;padding:6px 13px;
-border-radius:var(--r-md);border:1px solid transparent;background:var(--accent);color:var(--on-accent);
-cursor:pointer;transition:background-color .15s ease,border-color .15s ease,transform .1s ease}
-.dsw-btn:hover:not(:disabled){background:var(--accent-hover)}
-.dsw-btn:active:not(:disabled){transform:translateY(1px)}
+/* 按钮：借 Our Free Model 的 .ofm_btn —— 玻璃底 + 内高光 + 悬停上浮 1px。
+   为什么不用原来的"实心主色 + hover 调 opacity"：
+     · 实心主色是「主按钮」的语义，不该是按钮的默认长相（一屏七八个实心蓝块会
+       抢走本该给"当前账号 / 告警"的注意力）；
+     · hover 调 opacity 会把文字一起变淡，看着像被禁用（这条保留原判断）。
+   现在默认是玻璃描边按钮，主按钮走 .primary 显式要。 */
+.dsw-btn{font:inherit;font-size:12px;font-weight:580;line-height:1.5;padding:6px 14px;
+border-radius:var(--r-md);border:1px solid var(--bd2);background:var(--glass);color:var(--fg);
+box-shadow:var(--sheen);cursor:pointer;
+transition:transform .18s var(--ease-instrument),border-color .2s var(--ease-instrument),
+  background .2s var(--ease-instrument),box-shadow .22s var(--ease-instrument)}
+.dsw-btn:hover:not(:disabled){border-color:color-mix(in srgb,var(--accent) 62%,var(--bd2));
+background:color-mix(in srgb,var(--accent) 8%,var(--glass));transform:translateY(-1px);
+box-shadow:var(--sheen),0 3px 8px rgb(0 0 0 / 9%)}
+/* 按下回落到原位并轻微缩小 —— 比"只位移"更像真的按到了 */
+.dsw-btn:active:not(:disabled){transform:translateY(0) scale(.985);
+transition-duration:.08s}
 .dsw-btn:disabled{opacity:.45;cursor:not-allowed}
 .dsw-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.dsw-btn.ghost{background:transparent;border-color:var(--bd2);color:var(--fg)}
+/* 主按钮：唯一铺满主色的那个。内高光让平涂的主色看起来是"有厚度"的 */
+.dsw-btn.primary{background:var(--accent);border-color:transparent;color:var(--on-accent);
+box-shadow:inset 0 1px 0 rgb(255 255 255 / 22%),0 1px 2px rgb(0 0 0 / 8%)}
+.dsw-btn.primary:hover:not(:disabled){background:var(--accent-hover);border-color:transparent}
+/* ghost：仍是无底透明，但保留描边色差（比 primary 弱、比纯文字强） */
+.dsw-btn.ghost{background:transparent;border-color:var(--bd2);color:var(--fg);box-shadow:none}
 .dsw-btn.ghost:hover:not(:disabled){background:var(--hover);border-color:var(--bd)}
 .dsw-btn.danger{background:transparent;border-color:var(--bd2);color:var(--err)}
 .dsw-btn.danger:hover:not(:disabled){background:var(--err-weak);border-color:var(--err)}
@@ -237,6 +275,30 @@ white-space:pre-wrap;word-break:break-word}
   animation:dsw-spin .9s linear infinite}
 @keyframes dsw-spin{to{transform:rotate(360deg)}}
 
+/* ── 启动卡片（「网页版」页签未启动时那张卡）────────────────────────────
+   改造前它是**内联样式**，且用了三个不存在的令牌名：
+     --dsw-alias-fg-muted / --dsw-alias-fg-base / --dsw-alias-bg-l2
+   这几个在 DSH 里根本没有（正确的叫 --dsw-alias-label-* / --dsw-alias-bg-layer-*），
+   于是每次都落到硬编码兜底（#fafafa / #222）—— **深色主题下整张卡是白底黑字**。
+   这是 bug 不是审美：兜底值只对浅色成立（同类坑见 AGENTS.md 2.1）。
+   现在改为类名走样式表，颜色全部来自上面的语义层，两套主题都跟着宿主走。 */
+.dsw-startcard{width:min(560px,86%);position:relative;overflow:hidden;
+  padding:22px 24px;border-radius:var(--r-lg);
+  border:1px solid var(--bd2);background:var(--glass);box-shadow:var(--sheen);
+  display:flex;flex-direction:column;gap:12px;
+  transition:border-color .2s var(--ease-instrument),box-shadow .24s var(--ease-instrument)}
+.dsw-startcard::before{content:"";position:absolute;left:0;right:0;top:0;height:2px;
+  background:var(--chan-sheen);opacity:.95;pointer-events:none}
+.dsw-startcard:hover{border-color:color-mix(in srgb,var(--accent) 42%,transparent);
+  box-shadow:var(--sheen),0 18px 40px rgb(0 0 0 / 12%)}
+.dsw-startcard-title{font-size:15px;font-weight:600;color:var(--fg)}
+.dsw-startcard-desc{font-size:12px;line-height:1.9;color:var(--fg2)}
+.dsw-startcard-tip{font-size:12px;color:var(--fg3)}
+/* 失败时：左侧色条 + 混过正文色的错误字（纯错误色在深色底上会发暗刺眼）。 */
+.dsw-startcard-err{font-size:12px;line-height:1.8;padding:9px 11px;border-radius:var(--r-sm);
+  border-left:3px solid var(--err);background:var(--err-weak);
+  color:color-mix(in srgb,var(--err) 78%,var(--fg))}
+
 /* ── 设置项 + 卡片盒（0.8.0）：对齐 Our Free Model 的设置页 ────────────────
    改造前是横排的「label · 控件 · value」：一行里三样东西抢宽度，
    一句说明塞不下，只能全堆到卡片尾的 dsw-hint，读的人得来回扫。
@@ -255,10 +317,25 @@ white-space:pre-wrap;word-break:break-word}
 .dsw-field.wide{grid-template-columns:minmax(0,1fr)}
 .dsw-field.wide .dsw-field-ctrl{justify-self:stretch;margin-top:var(--sp-1)}
 /* 卡片盒：**只有设置型内容**用它。数据型分组继续走"分区标题 + 负空间"
-   （另见 dsw-card 的说明：盒子本身不表达层级，连堆七张就是 AI 默认长相）。 */
-.dsw-card.boxed{background:var(--bg2);border:1px solid var(--bd);border-radius:var(--r-lg);
-  padding:var(--sp-2) var(--sp-4) var(--sp-3);margin:0 0 var(--sp-4)}
-.dsw-card.boxed > .dsw-cardhead{margin:var(--sp-3) 0 0;padding-bottom:var(--sp-1)}
+   （另见 dsw-card 的说明：盒子本身不表达层级，连堆七张就是 AI 默认长相）。
+
+   材质借 Our Free Model 的 .ofm_chan：
+     · 玻璃底（--glass）+ 内高光（--sheen）—— 比纯 bg2 平涂"有厚度"；
+     · 顶部 2px 渐变光条（--chan-sheen）—— 左端实色渐隐，读成"被光打到"；
+     · 悬停上浮 3px + 投影加深 + 描边染主色 —— 让"这是一块可交互的容器"成立。
+   光条用 ::before 绝对定位，所以必须 overflow:hidden 才不会被圆角切出直角。 */
+.dsw-card.boxed{position:relative;overflow:hidden;
+  background:var(--glass);border:1px solid var(--bd2);border-radius:var(--r-lg);
+  box-shadow:var(--sheen);
+  padding:var(--sp-3) var(--sp-4) var(--sp-4);margin:0 0 var(--sp-4);
+  transition:transform .22s var(--ease-instrument),box-shadow .24s var(--ease-instrument),
+    border-color .2s var(--ease-instrument)}
+.dsw-card.boxed::before{content:"";position:absolute;left:0;right:0;top:0;height:2px;
+  background:var(--chan-sheen);opacity:.95;pointer-events:none}
+.dsw-card.boxed:hover{transform:translateY(-3px);
+  border-color:color-mix(in srgb,var(--accent) 55%,transparent);
+  box-shadow:var(--sheen),0 18px 40px rgb(0 0 0 / 15%)}
+.dsw-card.boxed > .dsw-cardhead{margin:var(--sp-2) 0 0;padding-bottom:var(--sp-1)}
 /* 卡片头的副说明：与 dsw-field-desc 同色同级，让"组说明"和"项说明"读起来是一套。 */
 .dsw-carddesc{font-size:11.5px;line-height:1.6;color:var(--fg3);margin:2px 0 0;max-width:64ch}
 .dsw-gate-row{display:flex;align-items:center;gap:10px;margin:var(--sp-3) 0;flex-wrap:wrap}
@@ -362,12 +439,20 @@ overflow:hidden}
 /* 账号行：从"bg2 卡片里的凹陷块"改成"页面上的凸起块"。
    卡片没了之后 bg1 跟页面同色看不见，必须换成 bg2 —— 顺带让账号库成为
    页面上唯一有实底的一组，重要度自然凸显。 */
-.dsw-account{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border:1px solid var(--bd);
-border-radius:var(--r-md);padding:10px 12px;background:var(--bg2);
-transition:background-color .15s ease,border-color .15s ease}
-.dsw-account:hover{background:var(--hover)}
-.dsw-account.active{border-color:var(--accent);background:var(--accent-weak)}
-.dsw-account.active:hover{background:color-mix(in srgb,var(--accent) 16%,transparent)}
+.dsw-account{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+border:1px solid var(--bd2);
+border-radius:var(--r-lg);padding:11px 13px;background:var(--glass);box-shadow:var(--sheen);
+transition:transform .2s var(--ease-instrument),border-color .2s var(--ease-instrument),
+  background .2s var(--ease-instrument),box-shadow .22s var(--ease-instrument)}
+/* 悬停上浮 —— 与卡片同一套语言（账号行也是"可交互的整块"）。 */
+.dsw-account:hover{transform:translateY(-2px);background:var(--glass);
+  border-color:color-mix(in srgb,var(--accent) 40%,var(--bd2));
+  box-shadow:var(--sheen),0 8px 22px rgb(0 0 0 / 10%)}
+/* 当前账号：琥珀/主色描边 + 淡底。底用 color-mix 叠在 glass 上而不是透明 ——
+   叠 glass 才能保证"当前"这一档在深浅两套主题下都比普通行亮一档。 */
+.dsw-account.active{border-color:var(--accent);
+  background:color-mix(in srgb,var(--accent) 10%,var(--glass))}
+.dsw-account.active:hover{background:color-mix(in srgb,var(--accent) 15%,var(--glass))}
 .dsw-account-main{flex:1 1 200px;min-width:0}
 .dsw-account-title{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:13px;font-weight:500}
 .dsw-account-meta{font-size:11px;color:var(--fg3);margin-top:3px;word-break:break-all;font-variant-numeric:tabular-nums}
@@ -679,7 +764,7 @@ function WebLoginPlaceholder(props?: { sessionId?: string }): any {
             flexDirection: 'column',
             alignItems: 'center',
             gap: '10px',
-            color: 'var(--dsw-alias-fg-muted, #888)',
+            color: 'var(--dsw-alias-label-secondary, #545b66)',
           },
         },
         createElement('div', { key: 'spinner', className: 'dsw-spin' }),
@@ -717,27 +802,18 @@ function WebLoginPlaceholder(props?: { sessionId?: string }): any {
         'div',
         {
           key: 'card',
-          style: {
-            width: 'min(560px, 86%)',
-            padding: '22px 24px',
-            borderRadius: '14px',
-            border: '1px solid var(--dsw-alias-border-l2, #e2e2e2)',
-            background: 'var(--dsw-alias-bg-l2, #fafafa)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '12px',
-          },
+          className: 'dsw-startcard',
         },
         createElement(
           'div',
-          { key: 'title', style: { fontSize: '15px', fontWeight: 600, color: 'var(--dsw-alias-fg-base, #222)' } },
+          { key: 'title', className: 'dsw-startcard-title' },
           '网页版（内置浏览器）',
         ),
         createElement(
           'div',
           {
             key: 'desc',
-            style: { fontSize: '12px', lineHeight: 1.9, color: 'var(--dsw-alias-fg-muted, #777)' },
+            className: 'dsw-startcard-desc',
           },
           '在这里登录网页端并保持登录态 —— 站点自己的 JS 会一直跑（插件负责保活）。' +
             '发送仍走原有通路，网页端的回答不会回显到这里。',
@@ -750,7 +826,8 @@ function WebLoginPlaceholder(props?: { sessionId?: string }): any {
             {
               key: 'start',
               type: 'button',
-              className: 'dsw-btn',
+              /* primary：这张卡上只有这一个动作，它该是唯一实心主色的按钮。 */
+              className: 'dsw-btn primary',
               onClick: () => {
                 void guestBrowser.start()
               },
@@ -763,20 +840,13 @@ function WebLoginPlaceholder(props?: { sessionId?: string }): any {
               'div',
               {
                 key: 'err',
-                style: {
-                  fontSize: '12px',
-                  lineHeight: 1.8,
-                  padding: '8px 10px',
-                  borderRadius: '8px',
-                  color: '#b3261e',
-                  background: 'rgba(179,38,30,.08)',
-                },
+                className: 'dsw-startcard-err',
               },
               status.error,
             )
           : createElement(
               'div',
-              { key: 'tip', style: { fontSize: '12px', color: 'var(--dsw-alias-fg-muted, #999)' } },
+              { key: 'tip', className: 'dsw-startcard-tip' },
               '首次启动会向 DSH 桌面端申请一个内置浏览器。',
             ),
       ),
@@ -796,7 +866,7 @@ function WebLoginPlaceholder(props?: { sessionId?: string }): any {
             gap: '6px',
             alignItems: 'center',
             fontSize: '11px',
-            color: 'var(--dsw-alias-fg-muted, #888)',
+            color: 'var(--dsw-alias-label-secondary, #545b66)',
           },
         },
         stateText,
