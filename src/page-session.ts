@@ -105,18 +105,33 @@ export function pageSessionFromHeaders(rawHeaders: Record<string, string>): Page
  * ⚠️ 返回的字符串里**不含反引号**：它会被嵌进 `browser-transport.ts` 的模板字符串里，
  * 一个反引号就会提前终止外层字符串（那边已有同类注释踩过这个坑）。
  */
-export function buildSessionInstallExpression(writes: PageSessionWrite[]): string {
+export function buildSessionInstallExpression(writes: PageSessionWrite[], cookies: string[] = []): string {
   return (
     '(function(){' +
+    /**
+     * 🔴 源检查（dsh-webin 实测的坑）：`about:blank` 是 opaque origin，
+     * storage 按源隔离 —— 在错的源上写**等于白写**（它那边就是因为这个才发现
+     * "每次重启 DSH 都要重新登录"）。所以这里显式报出 origin，不静默吞掉。
+     */
+    'var origin="";try{origin=String(location.origin);}catch(e){}' +
+    'var wrongOrigin=(!origin||origin==="null"||origin==="about:blank");' +
     'var writes=' + JSON.stringify(writes) + ';' +
-    'var written=[],failed=[];' +
+    'var cookies=' + JSON.stringify(cookies) + ';' +
+    'var written=[],failed=[],cookiesWritten=0;' +
+    /**
+     * cookie 也要回写（webin：快照里存了 cookie 却不写回 = 白存）。
+     * ⚠️ httpOnly cookie 用 JS 既读不到也写不了（浏览器安全模型，不是实现问题）。
+     */
+    'if(!wrongOrigin){for(var c=0;c<cookies.length;c++){' +
+    'try{document.cookie=cookies[c]+"; path=/";cookiesWritten++;}catch(e){}}}' +
     'for(var i=0;i<writes.length;i++){' +
     'try{localStorage.setItem(writes[i].key,writes[i].value);written.push(writes[i].key);}' +
     'catch(e){failed.push(writes[i].key);}' +
     '}' +
     'var verified={};' +
     'for(var j=0;j<written.length;j++){try{verified[written[j]]=localStorage.getItem(written[j]);}catch(e){verified[written[j]]=null;}}' +
-    'return JSON.stringify({written:written,failed:failed,verified:verified});' +
+    'return JSON.stringify({written:written,failed:failed,verified:verified,' +
+    'origin:origin,wrongOrigin:wrongOrigin,cookiesWritten:cookiesWritten,cookiesTotal:cookies.length});' +
     '})()'
   )
 }

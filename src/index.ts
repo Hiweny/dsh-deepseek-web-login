@@ -131,6 +131,7 @@ import {
   guestSessionHeaders,
   normalizeGuestBeat,
   normalizeGuestSettings,
+  normalizeGuestStorage,
   type GuestBeat,
   type GuestSession,
   type GuestSettings,
@@ -186,6 +187,40 @@ interface Logger {
 /** 内置浏览器的持久设置文件。 */
 function guestSettingsPath(): string {
   return join(webLoginDir(), 'guest-settings.json')
+}
+
+/** 内置浏览器 localStorage 快照文件（分区不持久化 ⇒ 这份是登录态的唯一凭据）。 */
+function guestStoragePath(): string {
+  return join(webLoginDir(), 'guest-storage.json')
+}
+
+function readGuestStorage(): { storage?: Record<string, string>; cookie?: string } | undefined {
+  try {
+    const file = guestStoragePath()
+    if (!existsSync(file)) return undefined
+    const parsed = JSON.parse(readFileSync(file, 'utf8'))
+    // 兼容早期只存了扁平 map 的形态
+    const storage = normalizeGuestStorage((parsed && parsed.storage) ?? parsed)
+    const cookie = parsed && typeof parsed.cookie === 'string' ? parsed.cookie.slice(0, 4096) : undefined
+    if (!storage && !cookie) return undefined
+    return { ...(storage ? { storage } : {}), ...(cookie ? { cookie } : {}) }
+  } catch {
+    return undefined
+  }
+}
+
+function writeGuestStorage(storage: Record<string, string>, cookie: string): void {
+  try {
+    const file = guestStoragePath()
+    mkdirSync(join(file, '..'), { recursive: true })
+    writeFileSync(
+      file,
+      JSON.stringify({ at: new Date().toISOString(), storage, cookie }, null, 2) + '\n',
+      'utf8',
+    )
+  } catch {
+    /* 写不进去就算了：下次心跳还会再试 */
+  }
 }
 
 function readGuestSettings(): GuestSettings {
@@ -397,6 +432,13 @@ let lastGuestFingerprintLine = ''
  * 认领位在本进程内，第一个问的窗口拿到 `claimed: true`，其余一律 false。
  */
 let guestAutoStartClaimed = false
+/**
+ * 上一次落盘的内置浏览器 localStorage 快照（内容没变就不写盘）。
+ *
+ * 🔴 为什么 host 要存这个：DSH 给 guest 的分区**不是持久化的**（重启即清空），
+ * 登录态只能靠"读回快照 → 存盘 → 下次挂载装回页面"续命。
+ */
+let lastGuestStorageLine = ''
 /** 上一次"内置浏览器登录态 → 账号库"同步的结果（面板要看）。 */
 let guestSyncInfo: { action: string; accountId?: string; email?: string; at: string } | null = null
 let lastGuestErrorLine = ''
@@ -1641,6 +1683,9 @@ export function apply(ctx: any, config: Config = {}): void {
                 account: account.id,
                 userAgent: account.userAgent || '',
                 writes,
+                // 页面自己的 localStorage 快照 + 可见 cookie（分区不持久化 ⇒ 靠它们把登录态装回去）
+                storage: readGuestStorage()?.storage ?? null,
+                cookie: readGuestStorage()?.cookie ?? '',
                 ...(writes.length ? {} : { error: '这个账号没有 token（重新登录一次再试）' }),
               })
               return
@@ -1676,6 +1721,15 @@ export function apply(ctx: any, config: Config = {}): void {
               guestBeat = beat
               // 🔴 指纹落盘（变化才写）：「使用环境异常」弹不弹只有页面自己知道，
               //    host 没有运行日志（logs/ 只有 crash），不落盘就永远对不了账。
+              // 🔴 localStorage 快照落盘（内容变了才写）：分区不持久化，这份就是登录态的命根子
+              if ((beat.storage && Object.keys(beat.storage).length > 0) || beat.cookie) {
+                const line = JSON.stringify({ s: beat.storage ?? {}, c: beat.cookie ?? '' })
+                if (line !== lastGuestStorageLine) {
+                  writeGuestStorage(beat.storage ?? {}, beat.cookie ?? '')
+                  lastGuestStorageLine = line
+                }
+              }
+
               // 🔴 内置浏览器里登上了 ⇒ 把登录态同步进账号库（否则插件发请求还是用旧 token）
               if (beat.session) {
                 try {

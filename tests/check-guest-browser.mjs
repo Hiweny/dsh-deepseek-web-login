@@ -28,10 +28,11 @@ import {
   guestSessionFromObservation,
   needsViewportFix,
   normalizeGuestSettings,
+  normalizeGuestStorage,
   guestSessionHeaders,
   normalizeGuestBeat,
 } from '../src/guest-browser.ts'
-import { pageSessionFromHeaders } from '../src/page-session.ts'
+import { buildSessionInstallExpression, pageSessionFromHeaders } from '../src/page-session.ts'
 import { TRANSPORT_SITE_ORIGIN } from '../src/browser-transport.ts'
 
 const failures = []
@@ -288,6 +289,82 @@ async function main() {
       }
     }
     assert.equal(fpDepth, -1, '🔴 session 必须落在 fingerprint **之外**（顶层）—— 放进里面 host 读不到')
+  })
+
+  await test('🔴 localStorage 快照：收窄上限 + 没 token 也要带回来（分区不持久化，靠它续命）', () => {
+    const storage = normalizeGuestStorage({ userToken: 'T', big: 'x'.repeat(9000), ok: 'small' })
+    assert.ok(storage, '快照要收下')
+    assert.equal(storage.userToken, 'T')
+    assert.equal(storage.ok, 'small')
+    assert.ok(!('big' in storage), '单值超上限的键要丢掉（不许把巨型值搬回来）')
+    assert.equal(normalizeGuestStorage({ bad: 123 }), undefined, '非字符串值丢掉；全丢光 ⇒ undefined')
+    assert.equal(normalizeGuestStorage(null), undefined)
+    // 没 token 但页面有快照 ⇒ 也必须带回去（快照里可能还有别的键能救回来）
+    const only = guestSessionFromObservation({ userToken: '', ls: { userToken: 'FROM-SNAPSHOT' } })
+    assert.ok(!only.session, '没 token 不算已登录')
+    assert.equal(only.storage?.userToken, 'FROM-SNAPSHOT', '快照要带回来')
+    // 形状：顶层 storage 必须被 host 收下
+    const beat = normalizeGuestBeat({ ...GOOD, storage: { userToken: 'T' } })
+    assert.equal(beat?.storage?.userToken, 'T', '顶层 storage 必须被收下')
+  })
+
+  await test('契约：快照必须先落盘、挂载时**先装快照再装账号凭证**（同名以账号为准）', () => {
+    const host = readFileSync(fileURLToPath(new URL('../src/index.ts', import.meta.url)), 'utf8')
+    const guest = readFileSync(fileURLToPath(new URL('../src/client/guest.ts', import.meta.url)), 'utf8')
+    assert.ok(host.includes('writeGuestStorage(beat.storage ?? {}'), 'host 必须把快照落盘')
+    assert.ok(host.includes('beat.cookie'), 'host 必须把 cookie 一起落盘（webin：存了不回写 = 白存）')
+    assert.ok(host.includes('guest-storage.json'), '落盘文件名要明确')
+    assert.ok(host.includes('storage: readGuestStorage()'), '/browser/session 必须把快照交回面板')
+    assert.ok(host.includes('cookie: readGuestStorage()?.cookie'), '/browser/session 必须把 cookie 交回面板')
+    // 安装表达式要带 cookie 与**源检查**（webin 实测：在 about:blank 上写等于白写）
+    const page = readFileSync(fileURLToPath(new URL('../src/page-session.ts', import.meta.url)), 'utf8')
+    assert.ok(page.includes('wrongOrigin'), '安装表达式必须报出源不对的情形')
+    assert.ok(page.includes('cookiesWritten'), '安装表达式必须报告 cookie 写回数量')
+    // 客户端：恢复路径必须防重载风暴（同一个 token 不再反复 reload）
+    assert.ok(guest.includes('if (recovery && tokenToInstall && tokenToInstall === lastInstalledToken)'), '恢复路径要有防重载风暴闸门')
+    // 写入顺序：快照在前、账号凭证在后（后者覆盖前者）
+    const snapAt = guest.indexOf('Object.entries(session?.storage ?? {})')
+    const writesAt = guest.indexOf('for (const write of session?.writes ?? [])')
+    assert.ok(snapAt > 0 && writesAt > 0 && snapAt < writesAt, '必须先写快照、再写账号凭证')
+  })
+
+  await test('🔴 安装表达式真求值：cookie 要写回；源不对（about:blank）必须报出来', () => {
+    const writes = [{ key: 'userToken', value: 'T' }]
+    const cookies = ['a=1', 'b=2']
+    const run = (origin) => {
+      const store = {}
+      const jar = []
+      const expr = buildSessionInstallExpression(writes, cookies)
+      const fn = new Function('location', 'document', 'localStorage', `return ${expr}`)
+      const result = fn(
+        { origin, href: origin + '/' },
+        {
+          get cookie() {
+            return jar.join('; ')
+          },
+          set cookie(value) {
+            jar.push(String(value))
+          },
+        },
+        {
+          setItem: (k, v) => {
+            store[k] = v
+          },
+          getItem: (k) => (k in store ? store[k] : null),
+        },
+      )
+      return JSON.parse(result)
+    }
+    const good = run('https://chat.deepseek.com')
+    assert.equal(good.wrongOrigin, false, '正常源不该被判错')
+    assert.equal(good.cookiesWritten, 2, 'cookie 必须真的写回（webin：存了不回写 = 白存）')
+    assert.deepEqual(good.written, ['userToken'])
+    assert.equal(good.verified.userToken, 'T', '写进去还要读回来核对')
+
+    // 🔴 webin 踩过的坑：在 about:blank（opaque origin）上写 storage 会静默失败
+    const bad = run('about:blank')
+    assert.equal(bad.wrongOrigin, true, 'about:blank 必须被判为源不对')
+    assert.equal(bad.cookiesWritten, 0, '源不对时不许写 cookie')
   })
 
   await test('🔴 guest 与传输层共用同一条登录态链（形状不许分叉）', () => {

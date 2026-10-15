@@ -61,6 +61,10 @@ export interface GuestSessionResult {
   account?: string
   userAgent?: string
   writes?: { key: string; value: string }[]
+  /** 上次存下来的页面 localStorage 快照（分区不持久化 ⇒ 靠它把登录态装回页面） */
+  storage?: Record<string, string> | null
+  /** 上次存下来的页面可见 cookie（httpOnly 的拿不到；回写后页面才是登录态） */
+  cookie?: string
   error?: string
 }
 
@@ -68,7 +72,7 @@ export interface GuestDeps {
   /** 从 host 取"当前账号的登录态写法和那份真实 UA"。 */
   fetchSession: () => Promise<GuestSessionResult>
   /** 把写法编成页面脚本（复用 page-session 的构建器）。 */
-  buildInstall: (writes: { key: string; value: string }[]) => string
+  buildInstall: (writes: { key: string; value: string }[], cookies?: string[]) => string
   /** 把心跳报给 host（host 会校验形状）。 */
   reportBeat: (beat: GuestBeat) => Promise<void>
   workspace?: string
@@ -207,6 +211,8 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
   /** 视口不一致的修正次数（有上限，避免无限重载）。 */
   let viewportFixes = 0
   let beatSoonTimer: ReturnType<typeof setTimeout> | undefined
+  /** 上一次装进页面的 userToken（防重载风暴用）。 */
+  let lastInstalledToken = ''
   rectSettledHook = () => {
     if (element) void beatOnce()
   }
@@ -232,17 +238,71 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
   }
 
   /** 把登录态写进 guest 页面，然后 **reload**（站点 JS 启动时才读它）。 */
-  async function installSession(): Promise<boolean> {
+  /**
+   * 把登录态装进页面。
+   *
+   * @param recovery 是否是"页面报未登录"触发的**恢复**（不是挂载时的首次安装）。
+   *   恢复路径要防重载风暴：token 没变就说明装了也没用（比如 token 本身就是死的），
+   *   继续 reload 只会让页面每 60 秒闪一次。
+   */
+  async function installSession(recovery = false): Promise<boolean> {
     if (!element) return false
     const session = await deps.fetchSession()
-    if (!session?.ok || !session.writes?.length) {
+    /**
+     * 写入顺序：**先装整份快照**（页面自己写的全部键），**再装账号派生的**（同名的以后者为准）。
+     *
+     * 🔴 快照是分区不持久化下唯一的登录态凭据：即使某个号没进账号库，也能把页面装回登录态。
+     */
+    const merged: { key: string; value: string }[] = []
+    for (const [key, value] of Object.entries(session?.storage ?? {})) {
+      if (typeof value === 'string') merged.push({ key, value })
+    }
+    for (const write of session?.writes ?? []) {
+      const index = merged.findIndex((item) => item.key === write.key)
+      if (index >= 0) merged[index] = write
+      else merged.push(write)
+    }
+    if (!merged.length) {
       emit({ account: session?.account, note: session?.error ?? 'host 没有给出可用的登录态' })
       return false
     }
-    const expression = deps.buildInstall(session.writes)
+    /** 🔴 防重载风暴：恢复路径下，装的还是同一个 token ⇒ 重装+重载没有意义（token 本身可能已死）。 */
+    const tokenToInstall = merged.find((item) => item.key === 'userToken')?.value ?? ''
+    if (recovery && tokenToInstall && tokenToInstall === lastInstalledToken) {
+      emit({ note: '登录态仍然无效（已装过同一个 token，不再重复重载）' })
+      return false
+    }
+    lastInstalledToken = tokenToInstall
+    /**
+     * cookie 也要回写（dsh-webin 的实测结论：存了 cookie 不回写 = 白存），
+     * 且 `document.cookie` 里的 `k=v` 逐条写回（带 path=/）。
+     */
+    const cookies = String(session?.cookie ?? '')
+      .split(';')
+      .map((item) => item.trim())
+      .filter(Boolean)
+    const expression = deps.buildInstall(merged, cookies)
     const report = await element.executeJavaScript(expression)
-    emit({ account: session.account })
-    log(`guest：登录态已写入（${String(report).slice(0, 120)}）`)
+    emit({ account: session?.account })
+    /**
+     * 报告要**看**（不再静默）：`wrongOrigin` 表示脚本跑在了 about:blank 上（写了也是白写），
+     * `cookiesWritten` 是我们有没有把 cookie 写回去。
+     */
+    let parsed: Record<string, unknown> = {}
+    try {
+      parsed = typeof report === 'string' ? JSON.parse(report) : {}
+    } catch {
+      parsed = {}
+    }
+    log(
+      `guest：登录态已写入（键 ${merged.length} · cookie ${cookies.length} → 写回 ${
+        String(parsed.cookiesWritten ?? '?')
+      } · 源 ${String(parsed.origin ?? '?')}${parsed.wrongOrigin ? ' ⚠️ 源不对，写了也白写' : ''}）`,
+    )
+    if (parsed.wrongOrigin === true) {
+      emit({ note: '登录态写在了错误的源上（about:blank）—— 写了也白写' })
+      return false
+    }
     element.reload()
     await waitEvent(element, 'did-finish-load', 20_000)
     return true
@@ -365,7 +425,7 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
       log(`guest：导航失败 ${String(error)}`)
     })
     await waitEvent(created, 'did-finish-load', 25_000)
-    if (session?.ok && session.writes?.length) {
+    if (session?.ok || (session?.storage && Object.keys(session.storage).length > 0)) {
       await installSession()
     } else {
       emit({ note: session?.error ?? 'host 没有给出可用的登录态（页面会是未登录）' })
@@ -459,7 +519,7 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
       if (changed) {
         if (judged.state === 'logged-out') {
           log('guest：页面未登录 ⇒ 重装登录态')
-          await installSession().catch((error) => emit({ note: `重装失败：${String(error)}` }))
+          await installSession(true).catch((error) => emit({ note: `重装失败：${String(error)}` }))
         } else if (judged.state === 'off-origin') {
           log('guest：页面被导航走了 ⇒ 带回站点')
           await element.loadURL(GUEST_BROWSER_URL).catch(() => {})

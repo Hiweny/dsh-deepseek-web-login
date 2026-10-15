@@ -78,6 +78,21 @@ export interface GuestBeat {
    */
   session?: GuestSession
   /**
+   * 页面 localStorage 的**整份快照**。
+   *
+   * 🔴 为什么必须有：DSH 给 guest 的分区**不是持久化的**（`dsh-sidebar-browser-<uuid>`，
+   * 无 `persist:` 前缀）⇒ 每次重启 storage 全清空、必须重新登录。
+   * 我们把它整份存到磁盘，下次挂载时再装回去（webin 也是靠快照）。
+   * 这条**不依赖账号库**：即使某个号没能入库，快照也能把页面装回登录态。
+   */
+  storage?: Record<string, string>
+  /**
+   * 页面可见的 cookie 串（`document.cookie`）。
+   * 🔴 dsh-webin 的实测结论：快照里存了 cookie 却**不回写** = 白存 ⇒ 回写后页面才是登录态。
+   * ⚠️ httpOnly 的读不到（浏览器安全模型）。
+   */
+  cookie?: string
+  /**
    * 页面眼里的环境（探针顺带带回）。🔴 落盘到 `diagnostics/guest-fingerprint.jsonl`
    * —— 网页端弹不弹「使用环境异常」只有页面自己知道，**凭这个对账，不猜**。
    */
@@ -142,6 +157,9 @@ export function normalizeGuestBeat(raw: unknown): GuestBeat | null {
       }
     }
   }
+  const storage = normalizeGuestStorage(input.storage)
+  const cookie =
+    typeof input.cookie === 'string' && input.cookie.trim() ? input.cookie.slice(0, 4096) : undefined
   let session: GuestSession | undefined
   const rawSession = input.session
   if (rawSession && typeof rawSession === 'object') {
@@ -166,6 +184,8 @@ export function normalizeGuestBeat(raw: unknown): GuestBeat | null {
     ...(note ? { note } : {}),
     ...(fingerprint ? { fingerprint } : {}),
     ...(session ? { session } : {}),
+    ...(storage ? { storage } : {}),
+    ...(cookie ? { cookie } : {}),
   }
 }
 
@@ -188,6 +208,12 @@ export function guestProbeExpression(): string {
     'try{for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);' +
     'if(k&&k.indexOf("hif")===0){var v=String(localStorage.getItem(k)||"");' +
     'if(v.length<1200)hif[k]=v;}}}catch(e){}' +
+    // 整份 localStorage 快照：分区**不持久化**（重启即清空），登录态只能靠我们自己存回来
+    'var ls={};var lsSize=0;' +
+    'try{for(var j=0;j<localStorage.length;j++){var lk=localStorage.key(j);' +
+    'if(!lk)continue;var lv=String(localStorage.getItem(lk)||"");' +
+    'if(lv.length>8192)continue;if(lsSize+lv.length>65536)break;' +
+    'ls[lk]=lv;lsSize+=lv.length;}}catch(e){}' +
     'var info={};' +
     'try{var ui=localStorage.getItem("__appKit_userInfo");if(ui){' +
     'var pu=JSON.parse(ui);var vu=(pu&&pu.value)?pu.value:pu;' +
@@ -201,7 +227,7 @@ export function guestProbeExpression(): string {
     'return JSON.stringify({url:location.href,readyState:document.readyState,' +
     "userToken:(t===null||t===undefined)?'':String(t)," +
     'webdriver:navigator.webdriver===true,uaDataBrands:brands,webgl:webgl,' +
-    'hif:hif,info:info,' +
+    'hif:hif,info:info,ls:ls,ck:(function(){try{return String(document.cookie||"")}catch(e){return ""}})(),' +
     'ua:String(navigator.userAgent),vw:window.innerWidth,vh:window.innerHeight,' +
     'dpr:String(window.devicePixelRatio),sw:String(screen.width),sh:String(screen.height),' +
     // 渲染完成度：用户截图里我这边"下半部分是白的"——必须能区分"还没加载完"与"尺寸不对"
@@ -240,11 +266,22 @@ export function normalizeGuestSettings(raw: unknown): GuestSettings {
  * 我第一版就把 session 写进了 `fingerprint` 里面 —— host 只读顶层 ⇒ **同步从未触发**
  * （用户实测："登录上去之后依旧 API 密钥无效"）。抽出来 + 用例守住形状。
  */
-export function guestSessionFromObservation(observed: unknown): { session?: GuestSession } {
+export function guestSessionFromObservation(observed: unknown): {
+  session?: GuestSession
+  storage?: Record<string, string>
+  cookie?: string
+} {
   if (!observed || typeof observed !== 'object') return {}
   const seen = observed as Record<string, unknown>
+  const storage = normalizeGuestStorage(seen.ls)
+  const cookie = String(seen.ck ?? '').slice(0, 4096)
+  const carry = {
+    ...(storage ? { storage } : {}),
+    ...(cookie ? { cookie } : {}),
+  }
   const token = String(seen.userToken ?? '').trim()
-  if (!token) return {}
+  // 没 token 也要把快照/cookie 带回去（可能还有别的键能救回来）
+  if (!token) return carry
   const hif = (seen.hif ?? {}) as Record<string, unknown>
   const info = (seen.info ?? {}) as Record<string, unknown>
   const unwrap = (value: unknown): string => {
@@ -265,7 +302,26 @@ export function guestSessionFromObservation(observed: unknown): { session?: Gues
       userId: String(info.id ?? '').slice(0, 128),
       email: String(info.email ?? '').slice(0, 200),
     },
+    ...carry,
   }
+}
+
+/**
+ * 收窄 localStorage 快照（键长、单值、总量都设上限 —— 面板报上来的属于**不可信输入**）。
+ */
+export function normalizeGuestStorage(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const out: Record<string, string> = {}
+  let total = 0
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!key || key.length > 256) continue
+    if (typeof value !== 'string') continue
+    if (value.length > 8192) continue
+    if (total + value.length > 65536) break
+    out[key] = value
+    total += value.length
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 /**
