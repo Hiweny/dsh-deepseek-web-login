@@ -584,12 +584,78 @@ test('长任务保护：阈值 0 = 关闭（不引入意外的等待）', async 
   assert.equal(ctx.waits.length, 0, `不该有任何等待：${JSON.stringify(ctx.waits)}`)
 })
 
-test('长任务保护：中间歇够了 → 连续计数归零（"连续"指的是不停歇）', async () => {
+test('长任务保护：中间歇够了 → 连续计数归零（"歇够"= 10 分钟，不是两分钟）', async () => {
   const ctx = makeClockGate()
   await runBurst(ctx, 3)
-  ctx.tick(200_000) // 歇了 200 秒
+  /**
+   * 🔴 2026-10-15 实测把归零门槛从 2 分钟提到 10 分钟。
+   * 原因：那种"十几发一波、隔 1~4 分钟再来一波"的节奏**每波都把 2 分钟门槛洗掉**，
+   * 于是长休一次都没触发（当晚 22:31→22:53 共 49 次请求无长休，随后会话被吊销）。
+   */
+  ctx.tick(200_000) // 只歇 200 秒 —— 不算"歇够"，计数继续
   await runBurst(ctx, 3)
-  assert.equal(ctx.waits.length, 0, `歇过了就不该再长休：${JSON.stringify(ctx.waits)}`)
+  /**
+   * ⚠️ 判据看**日志**而不是 waits：长休的等待时长是从"上次结束 + 区间"算的，
+   * 200 秒本身已经把 60 秒的长休额度"睡"过去了 ⇒ waitMs ≤ 0 ⇒ 不会真的再等。
+   * 我们要守的是"计数没被洗掉"这件事 —— 它体现在长休被**判定**了（日志会说）。
+   */
+  assert.ok(
+    ctx.logs.some((l) => l.includes('长任务保护') && l.includes('长休')),
+    `200 秒不该被当成"歇够"（否则小间隙就能洗掉长任务保护）：logs=${JSON.stringify(ctx.logs)}`,
+  )
+
+  // 真歇够（> 10 分钟）⇒ 归零，连长休都不会被判
+  const fresh = makeClockGate()
+  await runBurst(fresh, 3)
+  fresh.tick(700_000)
+  await runBurst(fresh, 3)
+  assert.ok(
+    !fresh.logs.some((l) => l.includes('长任务保护') && l.includes('长休')),
+    `真歇过了就不该再判长休：${JSON.stringify(fresh.logs)}`,
+  )
+  assert.equal(fresh.waits.length, 0, `真歇过了就不该再等：${JSON.stringify(fresh.waits)}`)
+})
+
+test('🔴 滚动窗口限速：窗口内超过上限 ⇒ 长休（小间隙洗不掉这个计数）', async () => {
+  // 窗口 60s、上限 3 次；长任务保护关掉，单独验窗口
+  const ctx = makeClockGate({ longRunThreshold: 0, rateWindowMs: 60_000, rateMaxInWindow: 3 })
+  await runBurst(ctx, 3)
+  assert.equal(ctx.waits.length, 0, '前三发不该等')
+  await runBurst(ctx, 1)
+  assert.ok(
+    ctx.waits.filter((w) => w > 50_000).length >= 1,
+    `第 4 发必须长休（窗口内已 3 次）：${JSON.stringify(ctx.waits)}`,
+  )
+  assert.ok(
+    ctx.logs.some((l) => l.includes('滚动窗口限速')),
+    '长休要写日志说明是窗口触发（否则用户不知道为啥突然变慢）',
+  )
+})
+
+test('🔴 滚动窗口限速：典型封号节奏（十几发一波 + 小间隙）也拦得住', async () => {
+  const ctx = makeClockGate({ longRunThreshold: 0, rateWindowMs: 600_000, rateMaxInWindow: 6 })
+  await runBurst(ctx, 4)
+  ctx.tick(90_000) // 歇 90 秒（远小于窗口 ⇒ 不该洗掉计数）
+  await runBurst(ctx, 2)
+  await runBurst(ctx, 1)
+  assert.ok(
+    ctx.waits.filter((w) => w > 50_000).length >= 1,
+    `窗口内累计超过 6 次就必须长休：${JSON.stringify(ctx.waits)}`,
+  )
+})
+
+test('滚动窗口限速：窗口 0 = 关闭（不引入意外的等待）', async () => {
+  const ctx = makeClockGate({ longRunThreshold: 0, rateMaxInWindow: 0 })
+  await runBurst(ctx, 12)
+  assert.equal(ctx.waits.length, 0, `关闭后不该等：${JSON.stringify(ctx.waits)}`)
+})
+
+test('滚动窗口限速：窗口滑过之后不误伤', async () => {
+  const ctx = makeClockGate({ longRunThreshold: 0, rateWindowMs: 60_000, rateMaxInWindow: 3 })
+  await runBurst(ctx, 3)
+  ctx.tick(70_000) // 滑出窗口
+  await runBurst(ctx, 3)
+  assert.equal(ctx.waits.length, 0, `窗口滑过就不该再等：${JSON.stringify(ctx.waits)}`)
 })
 
 test('长任务保护：长休时长在区间内随机（不是固定值）', async () => {

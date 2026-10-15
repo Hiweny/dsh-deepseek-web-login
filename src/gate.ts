@@ -165,7 +165,25 @@ export function clampAutoSwitchMinutes(value: number): number {
 }
 
 /** 距上次请求超过这么久就算"歇过了"，连续计数归零。 */
-const LONG_RUN_IDLE_RESET_MS = 120_000
+/**
+ * 距上次请求超过这个时长 ⇒ 认为"人是歇过的"，连续计数归零。
+ *
+ * 🔴 2026-10-15 实测把它从 2 分钟提到 10 分钟：那晚的封号轨迹是
+ * "十几发一波、隔 1~4 分钟再来一波"——**每波都把 2 分钟门槛洗掉**，
+ * 于是连续 15 次的长休**一次都没触发**（22:31→22:53 共 49 次请求无长休，
+ * 随后会话被吊销）。真正的"人歇过"至少是十几分钟，不是两分钟。
+ */
+const LONG_RUN_IDLE_RESET_MS = 600_000
+
+/**
+ * 滚动窗口限速：`rateWindowMs` 内最多 `rateMaxInWindow` 次请求，超了强制长休。
+ *
+ * 为什么必须有：`consecutive`（连续计数）是**可被小间隙洗掉**的软计数 ——
+ * 只要每十几发就停一两分钟，它永远到不了阈值。滚动窗口不认这种花样：
+ * 它只看"这段时间里一共发了多少次"。
+ */
+const DEFAULT_RATE_WINDOW_MS = 1_800_000
+const DEFAULT_RATE_MAX_IN_WINDOW = 20
 
 /** 间隔可选的推荐档位（设置页的快捷按钮用）：[下限, 上限]。 */
 export const INTERVAL_PRESETS = [
@@ -227,6 +245,10 @@ export interface GateSettings {
   longRunThreshold: number
   /** 长休时长区间（毫秒）；未设置时用内置默认。 */
   longRunBreakMs?: CleanupRange
+  /** 滚动窗口长度（毫秒，默认 1800000 = 30 分钟）—— 窗口内最多 rateMaxInWindow 次。 */
+  rateWindowMs?: number
+  /** 滚动窗口内允许的最大请求数（0 = 关闭；默认 20）。 */
+  rateMaxInWindow?: number
   /** 间隔下限（毫秒）。与上限相等时退化为固定间隔。 */
   minRequestIntervalMs: number
   /** 间隔上限（毫秒）。实际等待在 [下限, 上限] 之间**随机**取值。 */
@@ -333,6 +355,12 @@ export function readGateSettings(): Partial<GateSettings> | undefined {
     if (delay) out.cleanupDelayMs = delay
     const gap = normalizeCleanupRange(parsed?.cleanupGapMs, CLEANUP_GAP_BOUNDS_MS)
     if (gap) out.cleanupGapMs = gap
+    if (Number.isFinite(parsed?.rateWindowMs)) {
+      out.rateWindowMs = Math.max(60_000, Math.min(6 * 3_600_000, Math.round(Number(parsed.rateWindowMs))))
+    }
+    if (Number.isFinite(parsed?.rateMaxInWindow)) {
+      out.rateMaxInWindow = Math.max(0, Math.min(200, Math.round(Number(parsed.rateMaxInWindow))))
+    }
     if (Number.isFinite(parsed?.longRunThreshold)) {
       const n = Math.round(Number(parsed.longRunThreshold))
       out.longRunThreshold = Math.max(
@@ -388,6 +416,10 @@ export interface RequestGateOptions {
   minIntervalMs?: number
   /** 间隔上限（毫秒）。缺省且未给 minIntervalMs 时用默认上限；给了 minIntervalMs 则取同值（保持「固定间隔」老语义）。 */
   maxIntervalMs?: number
+  /** 滚动窗口长度（毫秒，默认 1800000 = 30 分钟）。 */
+  rateWindowMs?: number
+  /** 滚动窗口内允许的最大请求数（0 = 关闭；默认 20）。 */
+  rateMaxInWindow?: number
   /** 长任务保护：连续多少次请求后强制长休一次（0 = 关闭）。缺省 DEFAULT_LONG_RUN_THRESHOLD。 */
   longRunThreshold?: number
   /** 长休时长区间（毫秒）。缺省 DEFAULT_LONG_RUN_BREAK_MS。 */
@@ -450,6 +482,17 @@ export function createRequestGate(options: RequestGateOptions = {}): RequestGate
   let longRunBreakMs: CleanupRange | undefined = options.longRunBreakMs
   /** 连续请求计数（长休后、或歇够了之后归零）。 */
   let consecutive = 0
+  /**
+   * 滚动窗口内的请求时刻（毫秒），用来算"这段时间一共发了多少次"。
+   * 只保留窗口内的（每次 acquire 时剪枝），长度上限也就是阈值量级，不会涨。
+   */
+  let recentStarts: number[] = []
+  let rateWindowMs = Number.isFinite(options.rateWindowMs as number)
+    ? Math.max(60_000, Math.round(options.rateWindowMs as number))
+    : DEFAULT_RATE_WINDOW_MS
+  let rateMaxInWindow = Number.isFinite(options.rateMaxInWindow as number)
+    ? Math.max(0, Math.round(options.rateMaxInWindow as number))
+    : DEFAULT_RATE_MAX_IN_WINDOW
 
   let minIntervalMs = clampInterval(
     options.minIntervalMs ?? (options.maxIntervalMs !== undefined ? options.maxIntervalMs : DEFAULT_MIN_REQUEST_INTERVAL_MS),
@@ -567,8 +610,12 @@ export function createRequestGate(options: RequestGateOptions = {}): RequestGate
     // 长任务保护：先算"是不是已经连着跑了很久"。
     // 距上次结束已经过了很久 → 说明人是歇过的，连续计数归零。
     if (hasFinished && now() - lastFinishedAt > LONG_RUN_IDLE_RESET_MS) consecutive = 0
+    // 滚动窗口：只看"这段时间一共发了多少次"（小间隙洗不掉）
+    recentStarts = recentStarts.filter((at) => now() - at < rateWindowMs)
+    const rateBreach = rateMaxInWindow > 0 && recentStarts.length >= rateMaxInWindow
     const breakRange = longRunBreakMs ?? DEFAULT_LONG_RUN_BREAK_MS
-    const needsBreak = longRunThreshold > 0 && consecutive > 0 && consecutive >= longRunThreshold
+    const consecutiveBreach = longRunThreshold > 0 && consecutive > 0 && consecutive >= longRunThreshold
+    const needsBreak = consecutiveBreach || rateBreach
 
     // 间隔：在 [下限, 上限] 之间**随机**取值，按「上一次结束」时刻算
     // （不是上一次开始 —— 否则长回答之后的连环请求仍然很密）。每一次的等待都不同，避免定时器特征。
@@ -577,7 +624,10 @@ export function createRequestGate(options: RequestGateOptions = {}): RequestGate
       const waitMs = lastFinishedAt + gap - now()
       if (needsBreak) {
         logger?.info?.(
-          `deepseek-web: 已连续 ${longRunThreshold} 次请求 —— 长休 ${Math.round(gap / 1000)}s 再继续（长任务保护：连续跑比间隔小更像脚本）`,
+          rateBreach
+            ? `deepseek-web: 近 ${Math.round(rateWindowMs / 60000)} 分钟已发 ${recentStarts.length} 次（上限 ${rateMaxInWindow}）` +
+              ` —— 长休 ${Math.round(gap / 1000)}s 再继续（滚动窗口限速：小间隙洗不掉这个计数）`
+            : `deepseek-web: 已连续 ${longRunThreshold} 次请求 —— 长休 ${Math.round(gap / 1000)}s 再继续（长任务保护：连续跑比间隔小更像脚本）`,
         )
       }
       if (waitMs > 0) {
@@ -596,6 +646,8 @@ export function createRequestGate(options: RequestGateOptions = {}): RequestGate
     // 下一次请求直接绕过长休（把「闸门可取消」的正确修复和长任务保护组合出了旁路）。
     if (signal?.aborted) throw aborted()
     if (needsBreak) consecutive = 0
+    // 记进滚动窗口（长休/普通请求都算"发过一次"）
+    recentStarts.push(now())
 
     } catch (error) {
       // 取消（或前序出错）时必须把自己从队列里摘掉：本节点的 mine 一旦不 resolve，
@@ -676,6 +728,8 @@ export function createRequestGate(options: RequestGateOptions = {}): RequestGate
       ...(cleanupGapMs ? { cleanupGapMs } : {}),
       longRunThreshold,
       ...(longRunBreakMs ? { longRunBreakMs } : {}),
+      rateWindowMs,
+      rateMaxInWindow,
       maxPromptChars,
       maxRefImages,
       contextWindow,
@@ -721,6 +775,12 @@ export function createRequestGate(options: RequestGateOptions = {}): RequestGate
     if (next.cleanupGapMs !== undefined) {
       const value = normalizeCleanupRange(next.cleanupGapMs, CLEANUP_GAP_BOUNDS_MS)
       if (value) cleanupGapMs = value
+    }
+    if (next.rateWindowMs !== undefined && Number.isFinite(next.rateWindowMs)) {
+      rateWindowMs = Math.max(60_000, Math.min(6 * 3_600_000, Math.round(next.rateWindowMs)))
+    }
+    if (next.rateMaxInWindow !== undefined && Number.isFinite(next.rateMaxInWindow)) {
+      rateMaxInWindow = Math.max(0, Math.min(200, Math.round(next.rateMaxInWindow)))
     }
     if (next.longRunThreshold !== undefined && Number.isFinite(next.longRunThreshold)) {
       longRunThreshold = Math.max(

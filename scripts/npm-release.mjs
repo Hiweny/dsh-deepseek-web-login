@@ -46,8 +46,13 @@ export function decidePublish({ version, view }) {
 export async function verifyPublished({
   version,
   view,
-  attempts = 6,
-  intervalMs = 10_000,
+  /**
+   * ⚠️ 1.0.0 与 1.0.1 两次真实故障：npm publish 返回成功、registry 也很快有了这一版，
+   * 但 CI 里 60 秒（6×10s）没等到 ⇒ 第 10 步判失败 ⇒ **Release 被整个跳过**
+   * （于是"npm 有、GitHub 没有"）。放宽到 3 分钟（12×15s），把这种传播抖动吃掉。
+   */
+  attempts = 12,
+  intervalMs = 15_000,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   log = (msg) => console.log(msg),
 }) {
