@@ -572,7 +572,8 @@ function WebLoginPlaceholder(props?: { sessionId?: string }): any {
     }
     /**
      * 页签第一次量出**可用尺寸**时：按设置自动挂上（用户不用点按钮），
-     * 但**绝不在面板加载时挂** —— 那会拖慢 DSH 启动（实测 ~15 秒）。
+     * 但**绝不在面板加载时挂**，而且要**等 UI 空闲**（空闲回调 + 8 秒兜底）——
+     * 实测顺序错了会让 DSH 启动多花 ~15 秒。
      */
     let autoStarted = false
     const autoStartIfNeeded = () => {
@@ -587,7 +588,21 @@ function WebLoginPlaceholder(props?: { sessionId?: string }): any {
             console.log('[deepseek-web: guest] 自动挂载未认领到（别的窗口负责）')
             return
           }
-          void guestBrowser.start()
+          /**
+           * 🔴 等 UI **空闲**再挂。
+           *
+           * 用户实测：DSH 启动要 ~15 秒才可用 —— 因为上次离开时停在「网页版」页签，
+           * 启动恢复该页签 ⇒ 自动挂立刻触发 ⇒ 冷启 Chromium + 加载整个网页端 + reload，
+           * 全在跟 UI 自己的启动抢 CPU/磁盘。
+           * `requestIdleCallback` 保证"UI 自己的活先干完"；超时 8 秒兜底（别永远不挂）。
+           */
+          const launch = () => {
+            void guestBrowser.start()
+          }
+          const idle = (globalThis as { requestIdleCallback?: (cb: () => void, options?: { timeout?: number }) => number })
+            .requestIdleCallback
+          if (typeof idle === 'function') idle(launch, { timeout: 8_000 })
+          else window.setTimeout(launch, 3_000)
         } catch (error) {
           console.warn('[deepseek-web: guest] 自动挂载失败：', error)
         }

@@ -258,6 +258,14 @@ async function main() {
       !hostMount.includes('guestBrowser.start()'),
       '🔴 GuestHost（面板加载即挂载）里不许直接 start —— 那会让 DSH 启动冷启浏览器',
     )
+    // 🔴 还要**等 UI 空闲**再挂（上次停在网页版页签时，启动即挂会让 DSH 多花 ~15 秒）
+    assert.ok(client.includes('requestIdleCallback'), '自动挂必须延到 UI 空闲（空闲回调 + 超时兜底）')
+    // 传输层：失败请求也要起空闲计时（否则浏览器被拉起后永不退场）
+    const transport = readFileSync(fileURLToPath(new URL('../src/transport.ts', import.meta.url)), 'utf8')
+    assert.ok(
+      /finally \{\s*noteTransportUsed\(\)/.test(transport),
+      '🔴 传输层必须在 finally 里记使用：失败请求也会拉起浏览器，不记就永远不睡',
+    )
   })
 
   await test('🔴 登录态抽取（纯函数）：解包 hif 头、带身份；没 token 就不发', () => {

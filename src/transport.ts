@@ -254,9 +254,16 @@ export function applyTransportState(state: TransportState): void {
      * （不在建 fetch 时起表 —— 那时会话还不存在，探测必然读不到页面。）
      */
     appliedBrowserFetch = (async (...args: any[]) => {
-      const response = await (rawBrowserFetch as any)(...args)
-      noteTransportUsed()
-      return response
+      /**
+       * ⚠️ 用 finally：**失败的请求也算"用过"**。
+       * 否则会出现"浏览器因为一次失败请求被拉起，但空闲计时器从未起表"⇒ 它永远不退场
+       * （2026-10-15 实测：AUTH 秒拒的请求把 Edge 拉起来后一直挂着）。
+       */
+      try {
+        return await (rawBrowserFetch as any)(...args)
+      } finally {
+        noteTransportUsed()
+      }
     }) as typeof fetch
     // 进入浏览器代理：先挂起（浏览器还没起，探活只会把它拉起来），第一次真实使用后解除
     idleWatch.suspend()
