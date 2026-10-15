@@ -166,6 +166,26 @@ export function guestProbeExpression(): string {
 }
 
 /**
+ * 内置浏览器的持久设置（`~/.dsh/web-login/guest-settings.json`）。
+ *
+ * 放在磁盘而不是 localStorage：DSH 的 UI 起源可能随端口变（localStorage 未必留得住），
+ * 而"重启后要不要自动挂"必须留得住。
+ */
+export interface GuestSettings {
+  /** 随 DSH 启动自动挂上（默认 true：用户既然装了它，就是要它一直在） */
+  autoStart: boolean
+}
+
+export const DEFAULT_GUEST_SETTINGS: GuestSettings = { autoStart: true }
+
+/** 收窄磁盘上的值（缺字段/坏值一律回默认，不猜）。 */
+export function normalizeGuestSettings(raw: unknown): GuestSettings {
+  if (!raw || typeof raw !== 'object') return { ...DEFAULT_GUEST_SETTINGS }
+  const input = raw as Record<string, unknown>
+  return { autoStart: input.autoStart === false ? false : true }
+}
+
+/**
  * 视口与盒子是否**不一致**（2026-10-15 实测：guest 的视口尺寸是挂载那一刻定下来、
  * 之后容器变大不跟上 —— 落盘证据 `vw=996/box.w=995` 但 `vh=150/box.h=578`，
  * 表现是页面只渲染顶上一条、下面全白、内容被裁）。

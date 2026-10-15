@@ -11,7 +11,7 @@
  */
 import { maskIdentifier, readAuth, refreshVerifiedIdentity, withVerifiedIdentity, writeAuth, type WebAuth } from './auth.ts'
 import { createRequire } from 'node:module'
-import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { PROVIDER, createAdapter, describeAuth, MODEL_SPECS, type AdapterConfig } from './adapter.ts'
 import {
@@ -125,9 +125,12 @@ import {
 } from './transport.ts'
 import { pageSessionFromHeaders } from './page-session.ts'
 import {
+  DEFAULT_GUEST_SETTINGS,
   guestSessionHeaders,
   normalizeGuestBeat,
+  normalizeGuestSettings,
   type GuestBeat,
+  type GuestSettings,
 } from './guest-browser.ts'
 import {
   applyContextMode,
@@ -175,6 +178,33 @@ interface Logger {
   info?: (message: string) => void
   warn?: (message: string) => void
   debug?: (message: string) => void
+}
+
+/** 内置浏览器的持久设置文件。 */
+function guestSettingsPath(): string {
+  return join(webLoginDir(), 'guest-settings.json')
+}
+
+function readGuestSettings(): GuestSettings {
+  try {
+    const file = guestSettingsPath()
+    if (!existsSync(file)) return { ...DEFAULT_GUEST_SETTINGS }
+    return normalizeGuestSettings(JSON.parse(readFileSync(file, 'utf8')))
+  } catch {
+    return { ...DEFAULT_GUEST_SETTINGS }
+  }
+}
+
+function writeGuestSettings(next: unknown): GuestSettings {
+  const settings = normalizeGuestSettings(next)
+  try {
+    const file = guestSettingsPath()
+    mkdirSync(join(file, '..'), { recursive: true })
+    writeFileSync(file, JSON.stringify(settings, null, 2) + '\n', 'utf8')
+  } catch {
+    /* 写不进去就用内存里的值继续（下次读取会回默认） */
+  }
+  return settings
 }
 
 function normalizeLogger(logger: any): Logger {
@@ -284,6 +314,14 @@ let accountsRefreshInFlight = false
 let guestBeat: GuestBeat | null = null
 /** 上一次落盘的指纹（变化才写，避免每分钟心跳灌爆诊断文件）。 */
 let lastGuestFingerprintLine = ''
+/**
+ * 自动挂载的**单窗口认领**位。
+ *
+ * 🔴 为什么需要：每个 DSH 窗口都会加载一份面板客户端 —— 不认领的话，
+ * 开三个窗口就会挂三个 guest（同一个号三份页面在跑），这正是"多窗口同号"的风险形态。
+ * 认领位在本进程内，第一个问的窗口拿到 `claimed: true`，其余一律 false。
+ */
+let guestAutoStartClaimed = false
 let lastGuestErrorLine = ''
 
 export function apply(ctx: any, config: Config = {}): void {
@@ -1528,6 +1566,25 @@ export function apply(ctx: any, config: Config = {}): void {
                 writes,
                 ...(writes.length ? {} : { error: '这个账号没有 token（重新登录一次再试）' }),
               })
+              return
+            }
+
+            // 内置浏览器的持久设置（重启后要不要自动挂）
+            if (req.method === 'GET' && route === '/browser/settings') {
+              sendJson(res, 200, { ok: true, ...readGuestSettings() })
+              return
+            }
+            if (req.method === 'POST' && route === '/browser/settings') {
+              const body = await readJsonBody(req)
+              const settings = writeGuestSettings({ autoStart: body?.autoStart === true })
+              sendJson(res, 200, { ok: true, ...settings })
+              return
+            }
+            // 自动挂载认领：只让一个窗口自动挂（见 guestAutoStartClaimed 的注释）
+            if (req.method === 'POST' && route === '/browser/claim-autostart') {
+              const claimed = !guestAutoStartClaimed
+              guestAutoStartClaimed = true
+              sendJson(res, 200, { ok: true, claimed })
               return
             }
 

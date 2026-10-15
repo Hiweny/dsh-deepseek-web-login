@@ -26,6 +26,7 @@ import {
   guestFingerprintFix,
   guestProbeExpression,
   needsViewportFix,
+  normalizeGuestSettings,
   guestSessionHeaders,
   normalizeGuestBeat,
 } from '../src/guest-browser.ts'
@@ -209,6 +210,26 @@ async function main() {
     assert.equal(needsViewportFix({ vw: 0, vh: 0 }, { w: 995, h: 578 }), false)
     assert.equal(needsViewportFix({ vw: 996, vh: 578 }, null), false)
     assert.equal(needsViewportFix({ vw: 996, vh: 578 }, { w: 0, h: 0 }), false)
+  })
+
+  await test('持久设置：默认自动启动，只有显式 false 才关（坏值不猜）', () => {
+    assert.equal(normalizeGuestSettings(undefined).autoStart, true, '缺省必须是"自动启动"')
+    assert.equal(normalizeGuestSettings(null).autoStart, true)
+    assert.equal(normalizeGuestSettings({}).autoStart, true)
+    assert.equal(normalizeGuestSettings({ autoStart: false }).autoStart, false)
+    assert.equal(normalizeGuestSettings({ autoStart: 'no' }).autoStart, true, '只认布尔 false')
+    assert.equal(normalizeGuestSettings({ autoStart: 0 }).autoStart, true)
+    assert.equal(normalizeGuestSettings('x').autoStart, true)
+  })
+
+  await test('契约：自动启动必须走"单窗口认领"（多窗口各挂一个 = 同一号多份页面）', () => {
+    const host = readFileSync(fileURLToPath(new URL('../src/index.ts', import.meta.url)), 'utf8')
+    const client = readFileSync(fileURLToPath(new URL('../src/client/index.ts', import.meta.url)), 'utf8')
+    assert.ok(host.includes("route === '/browser/claim-autostart'"), 'host 必须提供认领入口')
+    assert.ok(host.includes('guestAutoStartClaimed'), 'host 必须有认领位')
+    assert.ok(host.includes("route === '/browser/settings'"), 'host 必须提供设置读写')
+    assert.ok(client.includes("api('/browser/claim-autostart'"), '客户端必须认领后才自动挂')
+    assert.ok(/settings\?\.autoStart === false/.test(client), '客户端必须尊重"自动启动"开关')
   })
 
   await test('🔴 guest 与传输层共用同一条登录态链（形状不许分叉）', () => {

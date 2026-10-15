@@ -105,7 +105,7 @@ const rectListeners = new Set<(rect: GuestRect | null) => void>()
 
 export function publishGuestRect(rect: GuestRect | null): void {
   targetRect = rect
-  // 盒子变了就把 guest 的尺寸**显式**同步过去（见 syncElementSize 的注释）
+  // 盒子变了就把 guest 的尺寸同步过去（见 syncElementSize 的注释）
   syncElementSize()
   for (const fn of rectListeners) {
     try {
@@ -113,6 +113,15 @@ export function publishGuestRect(rect: GuestRect | null): void {
     } catch {
       /* 面板回调出错不该拖垮 guest */
     }
+  }
+  // 盒子稳定后跑一次自检：切回页签/缩放窗口时，视口不一致能**马上**被纠正，
+  // 而不是等下一个心跳（最长 84 秒）
+  if (rect && activeElement && rectSettledHook) {
+    if (rectSettledTimer !== undefined) clearTimeout(rectSettledTimer)
+    rectSettledTimer = setTimeout(() => {
+      rectSettledTimer = undefined
+      rectSettledHook?.()
+    }, 1_200)
   }
 }
 
@@ -146,6 +155,9 @@ export function subscribeGuestRect(fn: (rect: GuestRect | null) => void): () => 
 let hostNode: HTMLElement | undefined
 /** 当前 guest 元素（模块级：供 publishGuestRect → syncElementSize 使用）。 */
 let activeElement: GuestElement | undefined
+/** 盒子稳定后跑一次自检的钩子（由 createGuestBrowser 注册）。 */
+let rectSettledHook: (() => void) | undefined
+let rectSettledTimer: ReturnType<typeof setTimeout> | undefined
 
 export function registerGuestHost(node: HTMLElement | null): void {
   hostNode = node ?? undefined
@@ -193,6 +205,9 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
   let attaching = false
   /** 视口不一致的修正次数（有上限，避免无限重载）。 */
   let viewportFixes = 0
+  rectSettledHook = () => {
+    if (element) void beatOnce()
+  }
   let status: GuestStatus = {
     running: false,
     state: 'idle',
@@ -360,6 +375,7 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
     }
     element = undefined
     activeElement = undefined
+    rectSettledHook = undefined
     const current = lease
     lease = undefined
     if (current) {

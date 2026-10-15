@@ -469,6 +469,38 @@ function GuestHost(): any {
       offStatus()
     }
   }, [])
+
+  /**
+   * 随 DSH 启动**自动挂上**（用户："怎么每次重启完 DSH 都得重新打开"）。
+   *
+   * 三条约束：
+   *  - 设置读磁盘（`guest-settings.json`，默认开）—— localStorage 可能随端口变留不住；
+   *  - **单窗口认领**：多窗口各挂一个 guest = 同一个号多份页面在跑，这是"多窗口同号"的风险形态；
+   *  - 延迟 2 秒再挂：让页签/占位符先量出真实尺寸（挂载那一刻的尺寸会被 guest 采用）。
+   */
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const settings = await api('/browser/settings')
+        if (cancelled || settings?.autoStart === false) return
+        const claim = await api('/browser/claim-autostart', { method: 'POST', body: '{}' })
+        if (cancelled || claim?.claimed !== true) {
+          console.log('[deepseek-web: guest] 自动挂载未认领到（别的窗口负责）')
+          return
+        }
+        window.setTimeout(() => {
+          if (!cancelled) void guestBrowser.start()
+        }, 2_000)
+      } catch (error) {
+        // 自动挂失败不影响手动启动
+        console.warn('[deepseek-web: guest] 自动挂载失败：', error)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
   /**
    * 🔴 只有 guest **真的在跑**才显示宿主。
    *
@@ -843,9 +875,26 @@ function Panel(): any {
       for (const btn of [startBtn, stopBtn]) btn.type = 'button'
       const row = el('div', 'dsw-row')
       row.append(startBtn, stopBtn)
+      const autoBox = el('input') as HTMLInputElement
+      autoBox.type = 'checkbox'
+      autoBox.checked = true
+      const autoLabel = el('label', 'dsw-hint')
+      autoLabel.style.display = 'flex'
+      autoLabel.style.gap = '6px'
+      autoLabel.style.alignItems = 'center'
+      autoLabel.append(autoBox, document.createTextNode('重启 DSH 后自动启动（只在一个窗口里挂）'))
+      void api('/browser/settings').then((result) => {
+        autoBox.checked = result?.autoStart !== false
+      })
+      autoBox.addEventListener('change', () => {
+        void api('/browser/settings', {
+          method: 'POST',
+          body: JSON.stringify({ autoStart: autoBox.checked }),
+        })
+      })
       const statusLine = el('div', 'dsw-hint', '内置浏览器：未启动')
       const noteLine = el('div', 'dsw-hint', '')
-      browserPane.append(row, statusLine, noteLine)
+      browserPane.append(row, autoLabel, statusLine, noteLine)
 
       const render = (status: GuestStatus): void => {
         const ago = status.at ? Math.max(0, Math.round((Date.now() - status.at) / 1000)) : null
