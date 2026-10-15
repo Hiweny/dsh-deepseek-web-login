@@ -352,6 +352,13 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
                 webdriver: (observed as Record<string, unknown>).webdriver === true,
                 brands: String((observed as Record<string, unknown>).uaDataBrands ?? ''),
                 webgl: String((observed as Record<string, unknown>).webgl ?? ''),
+                // 页面自己的视口尺寸（"大小不对"要跟宿主盒子比一比）
+                vw: Number((observed as Record<string, unknown>).vw ?? 0),
+                vh: Number((observed as Record<string, unknown>).vh ?? 0),
+                dpr: String((observed as Record<string, unknown>).dpr ?? ''),
+                ...(targetRect
+                  ? { box: { w: Math.round(targetRect.width), h: Math.round(targetRect.height) } }
+                  : {}),
               },
             }
           : {}),

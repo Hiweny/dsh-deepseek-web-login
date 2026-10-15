@@ -23,6 +23,7 @@ process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'dsh-guest-browser-'))
 import {
   GUEST_BEAT_STATES,
   GUEST_BROWSER_URL,
+  guestFingerprintFix,
   guestProbeExpression,
   guestSessionHeaders,
   normalizeGuestBeat,
@@ -51,9 +52,20 @@ function runProbe(env) {
     'document',
     'localStorage',
     'navigator',
+    'window',
+    'screen',
     `return ${expr}`,
   )
-  return JSON.parse(fn(env.location, env.document, env.localStorage, env.navigator ?? { webdriver: false, userAgentData: { brands: [] } }))
+  return JSON.parse(
+    fn(
+      env.location,
+      env.document,
+      env.localStorage,
+      env.navigator ?? { webdriver: false, userAgentData: { brands: [] } },
+      env.window ?? { innerWidth: 1280, innerHeight: 800, devicePixelRatio: 1 },
+      env.screen ?? { width: 2560, height: 1440 },
+    ),
+  )
 }
 
 async function main() {
@@ -136,6 +148,19 @@ async function main() {
     assert.ok(broken.url.includes('deepseek.com'), '出错了也要把 url 带回来（排查要用）')
   })
 
+  await test('🔴 指纹修正脚本必须**真求值**通过（第一版在这挂了：uaFullVersion 拼成了代码）', async () => {
+    const code = guestFingerprintFix('Mozilla/5.0 Chrome/152.0.0.0 Safari/537.36')
+    const fake = {}
+    // 不 try/catch：语法错误必须把用例打红（当时调用点 .catch 把它吞了，谁都不知道）
+    new Function('navigator', code)(fake)
+    assert.ok(fake.userAgentData, '必须装上 userAgentData')
+    assert.equal(fake.userAgentData.brands[0].brand, 'Google Chrome', '品牌要含 Google Chrome')
+    assert.equal(fake.userAgentData.brands[0].version, '152')
+    const hev = await fake.userAgentData.getHighEntropyValues()
+    assert.equal(String(hev.uaFullVersion), '152.0.0.0', '完整版本号要是字符串')
+    assert.equal(fake.webdriver, false, 'webdriver 必须钉成 false')
+  })
+
   await test('探针真求值：指纹三件套随心跳带回（Electron 品牌一眼可见）', () => {
     const seen = runProbe({
       location: { href: 'https://chat.deepseek.com/' },
@@ -149,6 +174,9 @@ async function main() {
     assert.equal(seen.webdriver, true, '页面里的 webdriver 必须如实带回')
     assert.ok(String(seen.uaDataBrands).includes('Electron'), `品牌要带回：${seen.uaDataBrands}`)
     assert.equal(seen.webgl, '', '假环境里 canvas 无 webgl ⇒ 空串而不是崩')
+    assert.equal(seen.vw, 1280, '视口宽要带回（排查"大小不对"的唯一依据）')
+    assert.equal(seen.vh, 800, '视口高要带回')
+    assert.equal(String(seen.ua).length > 0, true, 'ua 必须真的带回（第一版漏了这个字段，落盘一直是空串）')
   })
 
   await test('心跳形状：fingerprint 字段收窄（非对象丢弃、字符串截断、webdriver 只认 true）', () => {

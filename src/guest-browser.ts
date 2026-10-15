@@ -32,6 +32,12 @@ export interface GuestFingerprint {
   webdriver: boolean
   brands: string
   webgl: string
+  /** 页面视口尺寸（排查"大小不对"用：与宿主盒子的矩形比一比就知道有没有缩放） */
+  vw?: number
+  vh?: number
+  dpr?: string
+  /** 宿主盒子（面板侧量出来的矩形）—— 与 `vw/vh` 比：相等就是 1:1，不等就有缩放 */
+  box?: { w: number; h: number }
 }
 
 export interface GuestBeat {
@@ -83,7 +89,28 @@ export function normalizeGuestBeat(raw: unknown): GuestBeat | null {
     const webgl = typeof raw.webgl === 'string' ? raw.webgl.slice(0, 200) : ''
     const webdriver = raw.webdriver === true
     if (ua || brands || webgl || webdriver) {
-      fingerprint = { ua, webdriver, brands, webgl }
+      const vw = Number(raw.vw)
+      const vh = Number(raw.vh)
+      const dpr = typeof raw.dpr === 'string' ? raw.dpr.slice(0, 12) : undefined
+      let box: { w: number; h: number } | undefined
+      const rawBox = raw.box
+      if (rawBox && typeof rawBox === 'object') {
+        const w = Number((rawBox as Record<string, unknown>).w)
+        const h = Number((rawBox as Record<string, unknown>).h)
+        if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
+          box = { w: Math.floor(w), h: Math.floor(h) }
+        }
+      }
+      fingerprint = {
+        ua,
+        webdriver,
+        brands,
+        webgl,
+        ...(Number.isFinite(vw) && vw > 0 ? { vw: Math.floor(vw) } : {}),
+        ...(Number.isFinite(vh) && vh > 0 ? { vh: Math.floor(vh) } : {}),
+        ...(dpr ? { dpr } : {}),
+        ...(box ? { box } : {}),
+      }
     }
   }
   return {
@@ -119,8 +146,10 @@ export function guestProbeExpression(): string {
     'webgl=String(g.getParameter(d.UNMASKED_RENDERER_WEBGL));}catch(e){}' +
     'return JSON.stringify({url:location.href,readyState:document.readyState,' +
     "userToken:(t===null||t===undefined)?'':String(t)," +
-    'webdriver:navigator.webdriver===true,uaDataBrands:brands,webgl:webgl});' +
-    "}catch(e){return JSON.stringify({url:location.href,readyState:'',userToken:'',webdriver:false,uaDataBrands:'',webgl:''});}})()"
+    'webdriver:navigator.webdriver===true,uaDataBrands:brands,webgl:webgl,' +
+    'ua:String(navigator.userAgent),vw:window.innerWidth,vh:window.innerHeight,' +
+    'dpr:String(window.devicePixelRatio),sw:String(screen.width),sh:String(screen.height)});' +
+    "}catch(e){return JSON.stringify({url:location.href,readyState:'',userToken:'',webdriver:false,uaDataBrands:'',webgl:'',ua:'',vw:0,vh:0,dpr:'',sw:'',sh:''});}})()"
   )
 }
 
@@ -161,11 +190,18 @@ export function buildGuestUserAgent(ua: string): string {
 export function guestFingerprintFix(userAgent: string): string {
   const major = /Chrome\/(\d+)/.exec(String(userAgent ?? ''))?.[1] ?? '0'
   const m = JSON.stringify(major)
+  /**
+   * ⚠️ 完整版本号要**整个**当字符串字面量拼进去。
+   * 0.9.x 的第一版写成 `'uaFullVersion:' + m + '.0.0.0,'` —— 于是生成的是
+   * `uaFullVersion:"152".0.0.0` ⇒ **语法错误**，而调用点 `.catch(()=>{})` 把它吞了，
+   * 表现是 brands 一直是 Electron 默认值（真求值才抓到；见 check-guest-browser 用例）。
+   */
+  const full = JSON.stringify(`${major}.0.0.0`)
   return (
     '(function(){try{' +
     'var brands=[{brand:"Google Chrome",version:' + m + '},{brand:"Chromium",version:' + m + '},{brand:"Not_A Brand",version:"24"}];' +
     'var uad={brands:brands,mobile:false,platform:"Windows",' +
-    'getHighEntropyValues:function(){return Promise.resolve({architecture:"x86",bitness:"64",brands:brands,mobile:false,platform:"Windows",platformVersion:"10.0.0",uaFullVersion:' + m + '.0.0.0,fullVersionList:brands});},' +
+    'getHighEntropyValues:function(){return Promise.resolve({architecture:"x86",bitness:"64",brands:brands,mobile:false,platform:"Windows",platformVersion:"10.0.0",uaFullVersion:' + full + ',fullVersionList:brands});},' +
     'toJSON:function(){return{brands:brands,mobile:false,platform:"Windows"}}};' +
     'try{Object.defineProperty(navigator,"userAgentData",{get:function(){return uad;},configurable:true});}catch(e){}' +
     'try{Object.defineProperty(navigator,"webdriver",{get:function(){return false;},configurable:true});}catch(e){}' +
