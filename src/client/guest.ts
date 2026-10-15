@@ -20,6 +20,7 @@ import {
   buildGuestUserAgent,
   guestFingerprintFix,
   guestProbeExpression,
+  needsViewportFix,
   type GuestBeat,
   type GuestBeatState,
 } from '../guest-browser.ts'
@@ -104,6 +105,8 @@ const rectListeners = new Set<(rect: GuestRect | null) => void>()
 
 export function publishGuestRect(rect: GuestRect | null): void {
   targetRect = rect
+  // 盒子变了就把 guest 的尺寸**显式**同步过去（见 syncElementSize 的注释）
+  syncElementSize()
   for (const fn of rectListeners) {
     try {
       fn(rect)
@@ -113,6 +116,28 @@ export function publishGuestRect(rect: GuestRect | null): void {
   }
 }
 
+/**
+ * 🔴 把 webview 的尺寸**按像素显式**设成盒子尺寸。
+ *
+ * 为什么不能只靠 CSS `width/height:100%`（2026-10-15 实测）：
+ * guest 的**视口尺寸是挂载那一刻定下来的**，之后容器变大它不会自己跟上 ——
+ * 落盘证据 `vw=996 / box.w=995`（宽 ✓）但 `vh=150 / box.h=578`（高 ✗）：
+ * 页面按 996×150 渲染，于是只有顶上一条有内容、下面全白、内容还被裁。
+ * ⇒ 每次盒子变化都直接把像素尺寸写进元素，并让 guest 自己重排一次。
+ */
+function syncElementSize(): void {
+  const el = activeElement
+  if (!el || !targetRect) return
+  const w = Math.round(targetRect.width)
+  const h = Math.round(targetRect.height)
+  if (w <= 0 || h <= 0) return
+  if (el.style.width === `${w}px` && el.style.height === `${h}px`) return
+  el.style.width = `${w}px`
+  el.style.height = `${h}px`
+  // 让 guest 内的页面知道视口变了（布局/媒体查询才会重算）
+  void el.executeJavaScript('window.dispatchEvent(new Event("resize"))').catch(() => {})
+}
+
 export function subscribeGuestRect(fn: (rect: GuestRect | null) => void): () => void {
   rectListeners.add(fn)
   return () => rectListeners.delete(fn)
@@ -120,6 +145,8 @@ export function subscribeGuestRect(fn: (rect: GuestRect | null) => void): () => 
 
 /** 宿主节点：由 overlay 组件注册进来，永不卸载。 */
 let hostNode: HTMLElement | undefined
+/** 当前 guest 元素（模块级：供 publishGuestRect → syncElementSize 使用）。 */
+let activeElement: GuestElement | undefined
 
 export function registerGuestHost(node: HTMLElement | null): void {
   hostNode = node ?? undefined
@@ -163,6 +190,8 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
   let visible = false
   let timer: ReturnType<typeof setTimeout> | undefined
   let inFlight = false
+  /** 视口不一致的修正次数（有上限，避免无限重载）。 */
+  let viewportFixes = 0
   let status: GuestStatus = {
     running: false,
     state: 'idle',
@@ -218,6 +247,16 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
     }
   }
 
+  /** 等到盒子有像样的高度（挂载那一刻的尺寸会被 guest 永久采用，见 syncElementSize）。 */
+  async function waitForUsableBox(timeoutMs = 3_000): Promise<boolean> {
+    const deadline = now() + timeoutMs
+    while (now() < deadline) {
+      if (targetRect && targetRect.width >= 200 && targetRect.height >= 200) return true
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    return targetRect !== null
+  }
+
   async function attach(): Promise<boolean> {
     const carrier = bridge()
     if (!carrier) {
@@ -231,6 +270,8 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
       await reportFailure('浏览器宿主节点还没挂上（shell.overlay 未渲染）')
       return false
     }
+    // 页签刚切过来时占位符可能还是初始高度；等它量出真实尺寸再建 guest
+    await waitForUsableBox()
     const reservation = await carrier.acquire(deps.workspace ?? 'deepseek-web-login')
     lease = reservation.lease
     /**
@@ -251,8 +292,10 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
     created.setAttribute('useragent', pageUa)
     created.setAttribute('allowpopups', '')
     created.setAttribute('src', `about:blank#${reservation.lease}`)
-    created.style.width = '100%'
-    created.style.height = '100%'
+    // 尺寸**按像素**给（不是 100%）：见 syncElementSize 的注释 ——
+    // guest 的视口只认挂载那一刻的尺寸，CSS 百分比在容器变化时不会让它重新布局
+    created.style.width = `${Math.round(targetRect?.width ?? 0) || 1}px`
+    created.style.height = `${Math.round(targetRect?.height ?? 0) || 1}px`
     created.style.border = '0'
     created.style.display = 'block'
     // 主世界指纹修正（webdriver=false / userAgentData 品牌）—— 监听要在 append **之前**注册，
@@ -262,6 +305,7 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
     })
     node.appendChild(created)
     element = created
+    activeElement = created
     const ready = await waitEvent(created, 'dom-ready', 20_000)
     if (!ready) log('guest：dom-ready 等超时（继续试）')
     await created.loadURL(GUEST_BROWSER_URL).catch((error) => {
@@ -284,6 +328,7 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
     }
     element?.remove()
     element = undefined
+    activeElement = undefined
     const current = lease
     lease = undefined
     if (current) {
@@ -316,6 +361,28 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
         log(`guest：探测失败 ${String(error)}`)
       }
       const judged = judgeObservation(observed, SITE_ORIGIN)
+      /**
+       * 🔴 视口自检：guest 的视口高度可能与盒子不一致（挂载时刻的尺寸被"定形"）。
+       * 症状是页面只渲染顶上一条、下面全白、内容被裁。发现就同步尺寸 + 重载一次
+       * （重载会让页面按**当前**视口重新布局）。最多试 2 次，避免无限循环。
+       */
+      const seen = observed as { vw?: number; vh?: number } | null
+      if (
+        viewportFixes < 2 &&
+        needsViewportFix(
+          seen,
+          targetRect ? { w: Math.round(targetRect.width), h: Math.round(targetRect.height) } : null,
+        )
+      ) {
+        viewportFixes += 1
+        log(
+          `guest：视口 ${Number(seen.vw)}×${Number(seen.vh)} 与盒子 ` +
+            `${Math.round(targetRect.width)}×${Math.round(targetRect.height)} 不一致 ⇒ 同步尺寸并重载（第 ${viewportFixes} 次）`,
+        )
+        syncElementSize()
+        await new Promise((resolve) => setTimeout(resolve, 150))
+        element?.reload()
+      }
       const changed = judged.state !== status.state
       emit({
         state: judged.state,

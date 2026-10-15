@@ -25,6 +25,7 @@ import {
   GUEST_BROWSER_URL,
   guestFingerprintFix,
   guestProbeExpression,
+  needsViewportFix,
   guestSessionHeaders,
   normalizeGuestBeat,
 } from '../src/guest-browser.ts'
@@ -194,6 +195,20 @@ async function main() {
     const noWd = normalizeGuestBeat({ ...GOOD, fingerprint: { ua: 'x', webdriver: 'yes' } })
     assert.equal(noWd?.fingerprint?.webdriver, false, 'webdriver 只认布尔 true')
     assert.ok(!('fingerprint' in (normalizeGuestBeat(GOOD) ?? {})), '没报指纹就不该有该字段')
+  })
+
+  await test('🔴 视口自检：实测数据（vw=996/vh=150 对 box 995×578）必须判为需要修正', () => {
+    // 这次的真实现场：宽度对得上、高度差 3.8 倍 ⇒ 就是"只渲染顶上一条"的那个 bug
+    assert.equal(needsViewportFix({ vw: 996, vh: 150 }, { w: 995, h: 578 }), true)
+    // 正常情形（等于盒子）不许误报
+    assert.equal(needsViewportFix({ vw: 996, vh: 578 }, { w: 995, h: 578 }), false)
+    // 容差内的小差异不算
+    assert.equal(needsViewportFix({ vw: 990, vh: 574 }, { w: 995, h: 578 }), false)
+    // 拿不到数据/盒子无效时不动作（别瞎重载）
+    assert.equal(needsViewportFix(null, { w: 995, h: 578 }), false)
+    assert.equal(needsViewportFix({ vw: 0, vh: 0 }, { w: 995, h: 578 }), false)
+    assert.equal(needsViewportFix({ vw: 996, vh: 578 }, null), false)
+    assert.equal(needsViewportFix({ vw: 996, vh: 578 }, { w: 0, h: 0 }), false)
   })
 
   await test('🔴 guest 与传输层共用同一条登录态链（形状不许分叉）', () => {

@@ -165,6 +165,26 @@ export function guestProbeExpression(): string {
   )
 }
 
+/**
+ * 视口与盒子是否**不一致**（2026-10-15 实测：guest 的视口尺寸是挂载那一刻定下来、
+ * 之后容器变大不跟上 —— 落盘证据 `vw=996/box.w=995` 但 `vh=150/box.h=578`，
+ * 表现是页面只渲染顶上一条、下面全白、内容被裁）。
+ *
+ * 判定留在这里（纯函数）而不是埋在组件里，是为了能被用例真求值守住。
+ */
+export function needsViewportFix(
+  observed: { vw?: unknown; vh?: unknown } | null | undefined,
+  box: { w: number; h: number } | null | undefined,
+  tolerance = 8,
+): boolean {
+  if (!observed || !box) return false
+  const vw = Number(observed.vw)
+  const vh = Number(observed.vh)
+  if (!Number.isFinite(vw) || !Number.isFinite(vh) || vw <= 0 || vh <= 0) return false
+  if (!(box.w > 0) || !(box.h > 0)) return false
+  return Math.abs(vw - box.w) > tolerance || Math.abs(vh - box.h) > tolerance
+}
+
 /** 组装要写进 guest 页面的登录态（与传输层同一条路径：headers → writes）。 */
 export function guestSessionHeaders(account: { token?: string; hifLeim?: string }): Record<string, string> {
   const headers: Record<string, string> = {}
