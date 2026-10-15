@@ -120,6 +120,7 @@ import {
   type TransportKind,
   shutdownBrowserTransport,
   transportHeartbeatSnapshot,
+  transportSuspended,
 } from './transport.ts'
 import { pageSessionFromHeaders } from './page-session.ts'
 import {
@@ -898,6 +899,8 @@ export function apply(ctx: any, config: Config = {}): void {
     startProbeLoop({
       intervalMs: probeIntervalMs,
       getAuth: () => readAuth(),
+      // 传输层挂着（没人用）时跳过探活 —— 否则每次探活都会把浏览器重新拉起来
+      shouldRun: () => !transportSuspended(),
       logger,
     }),
   )

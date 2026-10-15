@@ -40,6 +40,7 @@ import {
   type HeartbeatSnapshot,
   type TransportHeartbeat,
 } from './transport-heartbeat.ts'
+import { createTransportIdleWatch, type TransportIdleWatch } from './transport-idle.ts'
 import { setFetchImpl } from './webapi.ts'
 
 export type TransportKind = 'chromium' | 'node'
@@ -81,6 +82,21 @@ export function writeTransportSetting(kind: TransportKind): void {
   const file = transportSettingsPath()
   mkdirSync(join(file, '..'), { recursive: true })
   writeFileSync(file, JSON.stringify({ transport: kind }, null, 2) + '\n', 'utf8')
+}
+
+/** 传输层空闲多久自动关闭（毫秒）；transport.json 的 `idleShutdownMs`。默认 10 分钟，0 = 永不退场。 */
+export const DEFAULT_TRANSPORT_IDLE_SHUTDOWN_MS = 10 * 60_000
+
+export function readTransportIdleShutdownMs(): number | undefined {
+  try {
+    const file = transportSettingsPath()
+    if (!existsSync(file)) return undefined
+    const parsed = JSON.parse(readFileSync(file, 'utf8'))
+    const value = parsed?.idleShutdownMs
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+  } catch {
+    return undefined
+  }
 }
 
 export interface TransportState {
@@ -168,8 +184,33 @@ export function transportHeartbeatSnapshot(): HeartbeatSnapshot | undefined {
   return transportHeartbeat?.snapshot()
 }
 
+/**
+ * 空闲看门狗：**没人用就退场**。
+ *
+ * 背景（2026-10-15 用户实测）：探活（启动 20s 一次、之后每 30 分钟）每次都走传输层 ⇒
+ * Edge 一旦拉起就永不退场 —— DSH 刚打开 20 秒就多出一个完整 Edge 实例，用户感知是
+ * "打开 DSH 都变慢、一直有个大浏览器挂着"。
+ * ⇒ **初始即挂起**：浏览器只在第一次真实使用后才拉起（探活跳过）；空闲满
+ *   `idleShutdownMs`（transport.json 可配，默认 10 分钟；0 = 永不退场）自动关闭。
+ */
+const idleWatch: TransportIdleWatch = createTransportIdleWatch({
+  idleMs: readTransportIdleShutdownMs() ?? 10 * 60_000,
+  initiallySuspended: true,
+  onIdle: () => {
+    stopTransportHeartbeat()
+    return shutdownBrowserTransport()
+  },
+  log: (message) => console.log(`[deepseek-web] ${message}`),
+})
+
+/** 探活据此跳过：浏览器没在跑时，探活只会把它重新拉起来（违背"没人用就退场"）。 */
+export function transportSuspended(): boolean {
+  return idleWatch.suspended()
+}
+
 /** 传输层被用过一次 ⇒ 起表（幂等）。 */
 export function noteTransportUsed(): void {
+  idleWatch.noteUse()
   if (!transportHeartbeat) {
     transportHeartbeat = createTransportHeartbeat({
       probe: readTransportPageState,
@@ -217,16 +258,21 @@ export function applyTransportState(state: TransportState): void {
       noteTransportUsed()
       return response
     }) as typeof fetch
+    // 进入浏览器代理：先挂起（浏览器还没起，探活只会把它拉起来），第一次真实使用后解除
+    idleWatch.suspend()
     setFetchImpl(appliedBrowserFetch)
     currentEffectiveKind = 'browser'
     return
   }
   if (appliedBrowserFetch) {
-    // 离开浏览器代理：保活也要停，否则会对着一个已经不存在的会话空转
+    // 离开浏览器代理：保活/空闲看门狗都要停，否则会对着一个已经不存在的会话空转
     stopTransportHeartbeat()
+    idleWatch.stop()
     void shutdownBrowserTransport()
     appliedBrowserFetch = undefined
   }
+  // 非浏览器传输下探活走 electron/node fetch，不需要浏览器 ⇒ 解除挂起，让探活照常跑
+  idleWatch.resume()
   if (state.effective === 'chromium' && electronNetFetch()) {
     setFetchImpl(electronNetFetch())
     currentEffectiveKind = 'electron'

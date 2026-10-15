@@ -213,6 +213,12 @@ export interface ProbeLoopOptions {
   /** 提供一个"当前凭证"的取值函数（每次探活都重新取，切号后自动跟着变）。 */
   getAuth: () => WebAuth | undefined
   logger?: ProbeLogger
+  /**
+   * 返回 false 时**跳过这一轮**探活（照常排下一轮）。
+   *
+   * 用途：传输层挂着（没人用）时，探活只会把浏览器重新拉起来 —— 违背"没人用就退场"。
+   */
+  shouldRun?: () => boolean
 }
 
 /**
@@ -229,6 +235,12 @@ export function startProbeLoop(options: ProbeLoopOptions): () => void {
 
   const tick = async (): Promise<void> => {
     if (stopped) return
+    if (options.shouldRun && !options.shouldRun()) {
+      // 这一轮跳过：现在探只会把浏览器重新拉起来。照常排下一轮。
+      timer = setTimeout(tick, options.intervalMs)
+      ;(timer as any)?.unref?.()
+      return
+    }
     try {
       await probeOnce(options.getAuth(), options.logger)
     } catch {
