@@ -471,36 +471,13 @@ function GuestHost(): any {
   }, [])
 
   /**
-   * 随 DSH 启动**自动挂上**（用户："怎么每次重启完 DSH 都得重新打开"）。
+   * ⚠️ 这里**不再**随面板加载自动挂 guest。
    *
-   * 三条约束：
-   *  - 设置读磁盘（`guest-settings.json`，默认开）—— localStorage 可能随端口变留不住；
-   *  - **单窗口认领**：多窗口各挂一个 guest = 同一个号多份页面在跑，这是"多窗口同号"的风险形态；
-   *  - 延迟 2 秒再挂：让页签/占位符先量出真实尺寸（挂载那一刻的尺寸会被 guest 采用）。
+   * 用户实测（2026-10-15）：那样会让 DSH 启动多花 ~15 秒 —— 每次开 DSH 都要冷启一个
+   * Chromium 渲染进程、加载整个网页端、再 reload 一次，和 UI 启动抢磁盘/CPU。
+   * dsh-webin 没有这个问题，因为它的 guest 是**切到 LDW 页签时才建**的。
+   * 所以自动挂的触发点搬到「网页版」页签第一次量出可用尺寸时（见 WebLoginPlaceholder）。
    */
-  useEffect(() => {
-    let cancelled = false
-    void (async () => {
-      try {
-        const settings = await api('/browser/settings')
-        if (cancelled || settings?.autoStart === false) return
-        const claim = await api('/browser/claim-autostart', { method: 'POST', body: '{}' })
-        if (cancelled || claim?.claimed !== true) {
-          console.log('[deepseek-web: guest] 自动挂载未认领到（别的窗口负责）')
-          return
-        }
-        window.setTimeout(() => {
-          if (!cancelled) void guestBrowser.start()
-        }, 2_000)
-      } catch (error) {
-        // 自动挂失败不影响手动启动
-        console.warn('[deepseek-web: guest] 自动挂载失败：', error)
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [])
   /**
    * 🔴 只有 guest **真的在跑**才显示宿主。
    *
@@ -586,10 +563,35 @@ function WebLoginPlaceholder(props?: { sessionId?: string }): any {
         const r = el.getBoundingClientRect()
         if (r.width > 0 && r.height > 0) {
           publishGuestRect({ left: r.left, top: r.top, width: r.width, height: r.height })
+          // 页签真的显示出来了（尺寸像样）⇒ 才考虑自动挂
+          if (r.width >= 200 && r.height >= 200) autoStartIfNeeded()
           return
         }
       }
       publishGuestRect(null)
+    }
+    /**
+     * 页签第一次量出**可用尺寸**时：按设置自动挂上（用户不用点按钮），
+     * 但**绝不在面板加载时挂** —— 那会拖慢 DSH 启动（实测 ~15 秒）。
+     */
+    let autoStarted = false
+    const autoStartIfNeeded = () => {
+      if (autoStarted || guestBrowser.status().running) return
+      autoStarted = true
+      void (async () => {
+        try {
+          const settings = await api('/browser/settings')
+          if (settings?.autoStart === false) return
+          const claim = await api('/browser/claim-autostart', { method: 'POST', body: '{}' })
+          if (claim?.claimed !== true) {
+            console.log('[deepseek-web: guest] 自动挂载未认领到（别的窗口负责）')
+            return
+          }
+          void guestBrowser.start()
+        } catch (error) {
+          console.warn('[deepseek-web: guest] 自动挂载失败：', error)
+        }
+      })()
     }
     const schedule = () => {
       if (frame === 0) frame = requestAnimationFrame(measure)

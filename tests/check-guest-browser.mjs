@@ -239,6 +239,25 @@ async function main() {
     assert.ok(host.includes("route === '/browser/settings'"), 'host 必须提供设置读写')
     assert.ok(client.includes("api('/browser/claim-autostart'"), '客户端必须认领后才自动挂')
     assert.ok(/settings\?\.autoStart === false/.test(client), '客户端必须尊重"自动启动"开关')
+    /**
+     * 🔴 自动挂的**触发点**必须是"页签显示出可用尺寸"，**不是面板加载** ——
+     * 后者每次开 DSH 都冷启一个 Chromium + 加载整个网页端，实测让启动多花 ~15 秒
+     * （webin 没有这个问题，因为它的 guest 是切到页签时才建）。
+     */
+    assert.ok(client.includes('const autoStartIfNeeded'), '必须有"页签触发"的自动挂函数')
+    // ⚠️ 定义与调用的**先后顺序不定**（measure 先定义、闭包后调用是合法的），所以只查"调用点存在"
+    assert.ok(
+      client.includes('if (r.width >= 200 && r.height >= 200) autoStartIfNeeded()'),
+      '自动挂必须在量到可用尺寸时触发',
+    )
+    // 面板加载路径里不许再直接 start（那才是拖慢启动的写法）
+    const hostMountAt = client.indexOf('function GuestHost')
+    const hostMountEnd = client.indexOf('function WebLoginPlaceholder')
+    const hostMount = client.slice(hostMountAt, hostMountEnd)
+    assert.ok(
+      !hostMount.includes('guestBrowser.start()'),
+      '🔴 GuestHost（面板加载即挂载）里不许直接 start —— 那会让 DSH 启动冷启浏览器',
+    )
   })
 
   await test('🔴 登录态抽取（纯函数）：解包 hif 头、带身份；没 token 就不发', () => {
