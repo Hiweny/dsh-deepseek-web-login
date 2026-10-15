@@ -69,7 +69,21 @@ export function npmView(version) {
   try {
     return execFileSync(
       process.platform === 'win32' ? 'npm.cmd' : 'npm',
-      ['view', `${PKG}@${version}`, 'version'],
+      [
+        'view',
+        `${PKG}@${version}`,
+        'version',
+        /**
+         * 🔴 `--prefer-online` 必须有。
+         *
+         * 1.0.0 的真实故障：发布**之前**先跑了一次 `should-publish`（那时问的是"有没有 1.0.0"
+         * ⇒ 答案是"没有"，这个 packument 进了 npm 本地缓存）⇒ 紧接着发布之后核验，
+         * 6 次重试（60 秒）全在读那个**旧缓存** ⇒ 核验判失败 ⇒ 整条 Release 流程中断
+         * （npm 上其实已经发成功了）。`--prefer-online` 强制对 registry 重新校验，
+         * 从根上避开这种"自己把自己缓存坑了"的竞态。
+         */
+        '--prefer-online',
+      ],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
     )
   } catch {

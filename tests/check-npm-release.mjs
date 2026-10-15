@@ -112,3 +112,12 @@ async function main() {
 }
 
 main()
+
+
+// 源码契约：真实的 npm view 必须带 --prefer-online（1.0.0 的缓存竞态事故，见该函数注释）
+{
+  const src = readFileSync(fileURLToPath(new URL('../scripts/npm-release.mjs', import.meta.url)), 'utf8')
+  const ok = src.includes("'--prefer-online'")
+  console.log(ok ? '  ✓ npmView 带 --prefer-online（避免发布会后读旧缓存）' : '  x npmView 缺 --prefer-online')
+  if (!ok) process.exitCode = 1
+}
