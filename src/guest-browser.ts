@@ -100,3 +100,42 @@ export function guestSessionHeaders(account: { token?: string; hifLeim?: string 
   if (hifLeim) headers['x-hif-leim'] = hifLeim
   return headers
 }
+
+/**
+ * guest 页面的 UA：**剔除 `Electron/` 与应用名**（dsh-webin 实测：网页端看到 `Electron/`
+ * 直接回「使用环境异常」）。Chromium 大版本取**当前内核真实版本** —— 写死旧版本
+ * 反而制造「UA 版本与能力不符」这个更明显的矛盾。
+ *
+ * 优先级（调用方决定）：**账号捕获的那份真实 UA** > 本函数的兜底。
+ * 输入已是干净 UA（不含 Electron）时原样返回 —— 别把用户的真实 Edge UA 改坏。
+ */
+export function buildGuestUserAgent(ua: string): string {
+  const raw = String(ua ?? '')
+  if (!raw) return raw
+  if (!/Electron\//.test(raw)) return raw
+  const major = /Chrome\/(\d+)/.exec(raw)?.[1] ?? '0'
+  return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`
+}
+
+/**
+ * 主世界指纹修正（页面内执行一次）：
+ *  - `navigator.webdriver` 钉死 false（Electron 里默认就是 false，显式钉是双保险）；
+ *  - `userAgentData` 补品牌列表 —— Electron 默认缺 `"Google Chrome"` 品牌，
+ *    而品牌列表是页面判断"这是不是正常浏览器"的另一个入口。
+ *
+ * ⚠️ 返回的字符串**不含反引号**（要嵌进模板字符串执行）。
+ */
+export function guestFingerprintFix(userAgent: string): string {
+  const major = /Chrome\/(\d+)/.exec(String(userAgent ?? ''))?.[1] ?? '0'
+  const m = JSON.stringify(major)
+  return (
+    '(function(){try{' +
+    'var brands=[{brand:"Google Chrome",version:' + m + '},{brand:"Chromium",version:' + m + '},{brand:"Not_A Brand",version:"24"}];' +
+    'var uad={brands:brands,mobile:false,platform:"Windows",' +
+    'getHighEntropyValues:function(){return Promise.resolve({architecture:"x86",bitness:"64",brands:brands,mobile:false,platform:"Windows",platformVersion:"10.0.0",uaFullVersion:' + m + '.0.0.0,fullVersionList:brands});},' +
+    'toJSON:function(){return{brands:brands,mobile:false,platform:"Windows"}}};' +
+    'try{Object.defineProperty(navigator,"userAgentData",{get:function(){return uad;},configurable:true});}catch(e){}' +
+    'try{Object.defineProperty(navigator,"webdriver",{get:function(){return false;},configurable:true});}catch(e){}' +
+    '}catch(e){}})()'
+  )
+}

@@ -172,6 +172,21 @@ async function main() {
     assert.ok(!/streamWebCompletion|postMessage\(.*prompt/.test(guest), 'guest 不许插进发送通路')
   })
 
+  await test('契约：「网页版」页签挂 conversation.view（与 对话/轨迹/LDW 并排），藏页签不许拆节点', () => {
+    const client = readFileSync(fileURLToPath(new URL('../src/client/index.ts', import.meta.url)), 'utf8')
+    assert.match(client, /slots\.inject\('conversation\.view'/, '必须注册 conversation.view（主区页签）')
+    assert.match(client, /label: \(\) => '网页版'/, '页签名')
+    // 常驻宿主仍在 shell.overlay（root scope，永不卸载）；页签里只是占位符
+    assert.match(client, /slots\.inject\('shell\.overlay'/)
+    assert.match(client, /WebLoginPlaceholder/, '占位符组件必须存在')
+    // 藏宿主 = 移出视口 + visibility:hidden；**不许 display:none**（webview 会停止布局，webin 实测）
+    assert.match(client, /visibility: 'hidden'/)
+    assert.ok(
+      !/dsh-deepseek-guest-host[\s\S]{0,600}display: 'none'/.test(client),
+      '宿主不许用 display:none 藏（会让 webview 停止布局）',
+    )
+  })
+
   console.log(`\n${failures.length ? '' : '通过 '}${failures.length ? failures.length + ' 项失败' : '所有用例通过'}`)
   if (failures.length) {
     for (const f of failures) console.error(f)

@@ -5,7 +5,7 @@
  * 渲染契约（沿用生态实测结论）：槽位 register 必须带 name 字段，
  * 渲染函数返回 React 元素（createElement），React #130 的坑即来自返回非元素。
  */
-import { createElement, useEffect, useRef, useState } from 'react'
+import { createElement, useLayoutEffect, useEffect, useRef, useState } from 'react'
 import {
   pickJsonFile,
   readImportSource,
@@ -15,7 +15,14 @@ import {
 import { describeCookieLife, summarizeCookieLife } from '../cookies.ts'
 import { accountsSignature, shouldSyncAccounts } from '../account-sync.ts'
 import { buildSessionInstallExpression } from '../page-session.ts'
-import { createGuestBrowser, registerGuestHost, type GuestStatus } from './guest.ts'
+import {
+  createGuestBrowser,
+  publishGuestRect,
+  registerGuestHost,
+  subscribeGuestRect,
+  type GuestRect,
+  type GuestStatus,
+} from './guest.ts'
 
 type ClientContext = {
   slots: any
@@ -450,29 +457,154 @@ const guestBrowser = createGuestBrowser({
  */
 function GuestHost(): any {
   const ref = useRef<any>(null)
+  const [rect, setRect] = useState<GuestRect | null>(null)
   useEffect(() => {
     registerGuestHost(ref.current ?? null)
-    return () => registerGuestHost(null)
+    const off = subscribeGuestRect(setRect)
+    return () => {
+      off()
+      registerGuestHost(null)
+    }
   }, [])
-  return createElement('div', {
-    ref,
-    id: 'dsh-deepseek-guest-host',
-    style: {
-      position: 'fixed',
-      right: '16px',
-      bottom: '52px',
-      width: '420px',
-      height: '620px',
-      maxHeight: '80vh',
-      zIndex: 30,
-      overflow: 'hidden',
-      borderRadius: '10px',
-      border: '1px solid var(--dsw-alias-border-l2, #d9d9d9)',
-      background: 'var(--dsw-alias-bg-base, #fff)',
-      boxShadow: '0 8px 28px rgba(0,0,0,.18)',
-      display: 'none',
-    },
+  /**
+   * 自校正定位（webin 同款）：期望位置来自占位符的 `getBoundingClientRect()`（视口坐标），
+   * 而 `position:fixed` 只有在没有 transform 祖先时才严格等于视口坐标 ⇒ 放好后量一次
+   * 自己的真实位置、按偏差平移修正；修正有上限（scale 类变换无法收敛时必须停下来）。
+   */
+  const fixAttempts = useRef(0)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    if (!rect) {
+      fixAttempts.current = 0
+      return
+    }
+    if (fixAttempts.current >= 4) return
+    const current = el.getBoundingClientRect()
+    const dx = rect.left - current.left
+    const dy = rect.top - current.top
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) {
+      fixAttempts.current = 0
+      return
+    }
+    fixAttempts.current += 1
+    el.style.left = `${(parseFloat(el.style.left || '0') || 0) + dx}px`
+    el.style.top = `${(parseFloat(el.style.top || '0') || 0) + dy}px`
   })
+  const style: Record<string, unknown> = {
+    position: 'fixed',
+    zIndex: 30,
+    overflow: 'hidden',
+    borderRadius: '10px',
+    border: '1px solid var(--dsw-alias-border-l2, #d9d9d9)',
+    background: 'var(--dsw-alias-bg-base, #fff)',
+    boxShadow: '0 8px 28px rgba(0,0,0,.18)',
+    boxSizing: 'border-box',
+  }
+  if (rect) {
+    Object.assign(style, { left: rect.left, top: rect.top, width: rect.width, height: rect.height, visibility: 'visible' })
+  } else {
+    // 页签不可见：移出视口 + hidden。**不用 display:none** —— 那会让 webview 停止布局（webin 实测）。
+    Object.assign(style, { left: '-99999px', top: '-99999px', width: '420px', height: '620px', visibility: 'hidden' })
+  }
+  return createElement('div', { ref, id: 'dsh-deepseek-guest-host', style })
+}
+
+/**
+ * 「网页版」页签的占位符（挂 `conversation.view`）。
+ *
+ * 它只做两件事：① 量自己的矩形报给常驻宿主；② guest 未启动时给出启动按钮。
+ * **绝不把 guest 放在这里** —— 页签切换会卸载它，webview 一摘一插就重新加载。
+ */
+function WebLoginPlaceholder(props?: { sessionId?: string }): any {
+  const ref = useRef<HTMLDivElement | null>(null)
+  const [status, setStatus] = useState<GuestStatus | null>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (el === null) return
+    let frame = 0
+    const measure = () => {
+      frame = 0
+      if (el.isConnected) {
+        const r = el.getBoundingClientRect()
+        if (r.width > 0 && r.height > 0) {
+          publishGuestRect({ left: r.left, top: r.top, width: r.width, height: r.height })
+          return
+        }
+      }
+      publishGuestRect(null)
+    }
+    const schedule = () => {
+      if (frame === 0) frame = requestAnimationFrame(measure)
+    }
+    const observer = new ResizeObserver(schedule)
+    observer.observe(el)
+    window.addEventListener('resize', schedule)
+    // 页签切换不一定会触发 resize ⇒ 低频兜底量一次
+    const poll = window.setInterval(schedule, 800)
+    schedule()
+    const off = guestBrowser.subscribe(() => setStatus(guestBrowser.status()))
+    setStatus(guestBrowser.status())
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', schedule)
+      window.clearInterval(poll)
+      if (frame) cancelAnimationFrame(frame)
+      off()
+      publishGuestRect(null)
+    }
+  }, [])
+  void props?.sessionId
+  const running = status?.running === true
+  const children: any[] = []
+  if (!running) {
+    children.push(
+      createElement(
+        'div',
+        {
+          key: 'hint',
+          style: { color: 'var(--dsw-alias-fg-muted, #888)', textAlign: 'center', maxWidth: '420px', lineHeight: 1.7 },
+        },
+        '内置浏览器未启动 —— 启动后这里就是网页端本体（登录状态由插件保活，站点自己的 JS 在跑）。',
+      ),
+      createElement(
+        'button',
+        {
+          key: 'start',
+          type: 'button',
+          className: 'dsw-btn',
+          onClick: () => {
+            void guestBrowser.start()
+          },
+        },
+        '启动内置浏览器',
+      ),
+      createElement(
+        'div',
+        {
+          key: 'note',
+          style: { color: 'var(--dsw-alias-fg-muted, #888)', fontSize: '12px', textAlign: 'center', maxWidth: '420px' },
+        },
+        status?.error ?? '首次启动需要 DSH 桌面端提供内置浏览器通道；拿不到时这里会说明原因。',
+      ),
+    )
+  }
+  return createElement(
+    'div',
+    {
+      ref,
+      style: {
+        width: '100%',
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: '10px',
+      },
+    },
+    children,
+  )
 }
 
 /** 面板本体：命令式 DOM（生态既有插件同款做法），挂在 React 容器里。 */
@@ -568,17 +700,16 @@ function Panel(): any {
         el(
           'div',
           'dsw-hint',
-          '在 DSH 窗口里挂一个真浏览器页面（停在网页端站点上），由插件保活：' +
-          '页面里站点自己的 JS 会跑。它不参与发消息 —— 发送仍走原有通路，网页端的回答不会回显到这里。' +
-          '⚠️ 首次启动需要 DSH 桌面端提供内置浏览器通道；拿不到时会在这里说明原因。',
+          '主界面顶部的「网页版」页签就是内置浏览器（登录网页版用，插件保活）。' +
+          '它不参与发消息 —— 发送仍走原有通路，网页端的回答不会回显到这里。' +
+          '这里只是另一处入口与状态查看。',
         ),
       )
       const startBtn = el('button', 'dsw-btn', '启动内置浏览器') as HTMLButtonElement
-      const toggleBtn = el('button', 'dsw-btn ghost', '显示浏览器') as HTMLButtonElement
       const stopBtn = el('button', 'dsw-btn danger', '关闭并释放') as HTMLButtonElement
-      for (const btn of [startBtn, toggleBtn, stopBtn]) btn.type = 'button'
+      for (const btn of [startBtn, stopBtn]) btn.type = 'button'
       const row = el('div', 'dsw-row')
-      row.append(startBtn, toggleBtn, stopBtn)
+      row.append(startBtn, stopBtn)
       const statusLine = el('div', 'dsw-hint', '内置浏览器：未启动')
       const noteLine = el('div', 'dsw-hint', '')
       browserPane.append(row, statusLine, noteLine)
@@ -622,11 +753,7 @@ function Panel(): any {
       stopBtn.addEventListener('click', () => {
         void guestBrowser.stop().then(render)
       })
-      toggleBtn.addEventListener('click', () => {
-        const next = !guestBrowser.visible()
-        guestBrowser.setVisible(next)
-        toggleBtn.textContent = next ? '隐藏浏览器' : '显示浏览器'
-      })
+      // 可见性由主界面的「网页版」页签驱动（webview 不能在设置页与页签间搬运）
     }
 
     const tabBar = el('div', 'dsw-tabs')
@@ -3581,6 +3708,28 @@ export function apply(ctx: ClientContext): void {
    * 拿不到这个槽位（不同 DSH 版本）时**只降级**：设置页里照旧能看状态，只是没有浏览器面板，
    * 所以这里必须 try/catch —— 不能让一个可选能力把整个插件带崩。
    */
+  /**
+   * 「网页版」页签（挂 `conversation.view`，与 对话/轨迹/LDW 并排）。
+   * 契约同 webin：`{ name, id, order, label }`；组件是**占位符**（量矩形 + 启动按钮），
+   * 真正的 guest 在上面的 `shell.overlay` 宿主里。
+   */
+  ctx.effect(
+    () => {
+      try {
+        return ctx.slots.inject('conversation.view', () =>
+          ctx.slots.register(
+            { name: 'conversation.view', id: 'deepseek-web-login-view', order: 30, label: () => '网页版' },
+            WebLoginPlaceholder,
+          ),
+        )
+      } catch (error) {
+        console.warn('[deepseek-web] conversation.view 槽位不可用，网页版页签将不可见：', error)
+        return undefined
+      }
+    },
+    'deepseek-web-login: web view tab',
+  )
+
   ctx.effect(
     () => {
       try {

@@ -17,6 +17,8 @@
  */
 import {
   GUEST_BROWSER_URL,
+  buildGuestUserAgent,
+  guestFingerprintFix,
   guestProbeExpression,
   type GuestBeat,
   type GuestBeatState,
@@ -88,6 +90,33 @@ export interface GuestBrowser {
 }
 
 const DEFAULT_INTERVAL_MS = 60_000
+
+/**
+ * 「网页版」页签占位符量出来的矩形（视口坐标）。
+ *
+ * 常驻宿主用 `position:fixed` 贴到这个矩形上 —— **guest 永远住在 overlay 里不动**，
+ * 页签里只放一个量尺寸的占位符（webin 同款：`<webview>` 一摘一插就会重新加载）。
+ * `null` = 页签当前不可见 ⇒ 宿主隐藏但 guest 继续活着。
+ */
+export interface GuestRect { left: number; top: number; width: number; height: number }
+let targetRect: GuestRect | null = null
+const rectListeners = new Set<(rect: GuestRect | null) => void>()
+
+export function publishGuestRect(rect: GuestRect | null): void {
+  targetRect = rect
+  for (const fn of rectListeners) {
+    try {
+      fn(rect)
+    } catch {
+      /* 面板回调出错不该拖垮 guest */
+    }
+  }
+}
+
+export function subscribeGuestRect(fn: (rect: GuestRect | null) => void): () => void {
+  rectListeners.add(fn)
+  return () => rectListeners.delete(fn)
+}
 
 /** 宿主节点：由 overlay 组件注册进来，永不卸载。 */
 let hostNode: HTMLElement | undefined
@@ -202,12 +231,16 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
     if (!ready) log('guest：dom-ready 等超时（继续试）')
 
     // UA 必须在**第一次导航到站点之前**设好，否则站点看到的是带 Electron 痕迹的 UA
+    // ⇒ 网页端看到 `Electron/` 直接回「使用环境异常」（dsh-webin 同款结论）。
+    // 优先用账号捕获的那份真实 UA；没有就用"剔除 Electron 的内核 UA"兜底 —— 反正不能裸奔。
     const session = await deps.fetchSession()
-    if (session?.userAgent) {
-      created.setAttribute('useragent', session.userAgent)
-    } else {
-      log('guest：host 没给 UA（账号记录里没有捕获到的 UA）⇒ 这一步洗白跳过')
-    }
+    const pageUa =
+      String(session?.userAgent ?? '').trim() || buildGuestUserAgent(navigator.userAgent)
+    created.setAttribute('useragent', pageUa)
+    // 主世界指纹修正（webdriver=false / userAgentData 品牌）—— 每次 dom-ready 都补一次
+    created.addEventListener('dom-ready', () => {
+      void created.executeJavaScript(guestFingerprintFix(pageUa)).catch(() => {})
+    })
     await created.loadURL(GUEST_BROWSER_URL).catch((error) => {
       log(`guest：导航失败 ${String(error)}`)
     })
@@ -308,12 +341,10 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
       await detach()
       return { ...status }
     },
-    setVisible(next: boolean) {
-      visible = next
-      const node = hostNode
-      if (node) node.style.display = next ? 'block' : 'none'
+    setVisible() {
+      // 可见性现在由「网页版」页签的矩形驱动（publishGuestRect），这里保留空实现以免调用点炸
     },
-    visible: () => visible,
+    visible: () => targetRect !== null,
     status: () => ({ ...status }),
     subscribe(fn) {
       listeners.add(fn)
