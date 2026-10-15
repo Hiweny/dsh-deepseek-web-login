@@ -2,6 +2,57 @@
 
 本项目大致遵循语义化版本；日期为本地时间。
 
+## 1.0.1 — 2026-10-15（深色主题下启动卡片白底黑字 + 借 Our Free Model 的材质语言打磨观感）
+
+这一版两件事：修一个只在深色主题下暴露的显示 bug，并把卡片 / 按钮 / 账号行的材质
+统一到 `dsh-our-free-model` 那套语言。**主色没变**（仍跟随宿主的 `--dsw-alias-brand-primary`），
+借的只是结构，不是配色。
+
+### 修 bug：「网页版」页签的启动卡片在深色下是白底黑字
+
+- 根因是 `GuestTab` 的内联样式用了三个 DSH 里**不存在**的令牌名：
+  `--dsw-alias-fg-muted`（4 处）/ `--dsw-alias-fg-base` / `--dsw-alias-bg-l2`。
+  名字不存在 ⇒ `var()` 永远落到硬编码兜底（`#fafafa` / `#222`），而那组兜底只对浅色主题成立。
+  这与 `AGENTS.md` 2.1 记的是同一类坑（那次是 `--theme-*`）。
+- 对照证据：本文件 CSS 层用的是正确的 `--dsw-alias-label-*` / `--dsw-alias-bg-layer-*`；
+  `dsh-our-free-model` 里 `--dsw-alias-label-secondary` 出现 24 次、`--dsw-alias-bg-layer-2` 15 次，
+  而这三个错名字 0 次。
+- 那 6 处内联样式改为类名（`.dsw-startcard` 系列），颜色全部回到语义层；顺带把两处
+  写死的错误色（`#b3261e` / `rgba(179,38,30,.08)`）换成 `var(--err)` / `var(--err-weak)`。
+
+### 观感：借 Our Free Model 的材质语言
+
+从 `dsh-our-free-model` 的 `client.js` 里提取到的手法，逐条对应：
+
+| 手法 | OFM 原值 | 本版 |
+|---|---|---|
+| 卡片顶部光条 | `.ofm_chan::before`，2px，`linear-gradient(90deg, accent, transparent 78%)` | 抽成 `--chan-sheen` |
+| 玻璃底 | `color-mix(in srgb, bg-layer-3 78%, transparent)` | 抽成 `--glass` |
+| 内高光 | `inset 0 1px 0 rgb(255 255 255 / 5%)` | 抽成 `--sheen` |
+| 悬停 | `translateY(-3px)` + 投影加深 + 描边染主色 | 卡片 -3px、账号行 -2px |
+| 动效曲线 | `--ease-instrument: cubic-bezier(.16,1,.3,1)` | 同（新增），另加 `--ease-settle` |
+| 胶囊选中 | `box-shadow: inset 0 0 0 1px bd2` | 标签页选中态 |
+
+- **按钮默认长相改了**：从实心主色改为玻璃描边，实心收敛到新增的 `.dsw-btn.primary`。
+  原因是一屏七八个实心主色块会抢走本该给「当前账号」和「告警」的注意力。
+  若不同意，把 `.dsw-btn` 的基态 + `:hover` + `:active` 三条规则**整段**换回原版即可 ——
+  只改基态会让 hover 从实心跳到几乎透明（`color-mix(--accent 8%, --glass)`），比不改更难看。
+  这段回退已实测：换回后三条规则与 `cb61277` 逐字相同，其余 8 项改动不受影响。
+- **圆角档位对齐 OFM**：`--r-lg` 12→16、`--r-md` 8→9，新增 `--r-pill:999px`。
+  这套比例让「容器」和「控件」一眼分得开。
+
+### 验证
+
+- `node scripts/build.mjs` exit 0；重建后 `lib/` 无变化（产物与源码一致）。
+- `node scripts/test-offline.mjs` 75/75 用例文件通过。
+- `node tests/check-bundle.mjs` 产物核对全部通过；`tests/check-smoke.mjs` 通过。
+- 渲染验证用的是从 `lib/client.js` 抽出的**真实 CSS**（浅深两套各渲一遍），不是只看源码。
+
+### 没做的事
+
+- 没动主色、没动布局与信息结构、没碰协议 / 传输 / 账号逻辑。
+- 改动只在 `src/client/index.ts`（116+/46-）与构建产物 `lib/`。
+
 ## 1.0.0 — 2026-10-15（内置浏览器「网页版」页签 + 登录态快照 + 保活心跳）
 
 这一版的主线是**「让那个真页面一直活着」**：主区多了个「网页版」页签，里面是 DSH 自带 Chromium
