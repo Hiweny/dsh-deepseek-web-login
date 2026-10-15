@@ -260,6 +260,14 @@ async function main() {
     )
     // 🔴 还要**等 UI 空闲**再挂（上次停在网页版页签时，启动即挂会让 DSH 多花 ~15 秒）
     assert.ok(client.includes('requestIdleCallback'), '自动挂必须延到 UI 空闲（空闲回调 + 超时兜底）')
+    /**
+     * 🔴 等待窗口期必须显示**加载态**（转圈 + 说明），不能显示"未启动 + 启动按钮"——
+     * 实测反馈：那样用户会以为自动启动开关没生效。
+     */
+    assert.ok(client.includes('.dsw-spin'), '样式表里必须有转圈动画')
+    assert.ok(client.includes('@keyframes dsw-spin'), '转圈动画要有 keyframes')
+    assert.ok(client.includes('正在恢复内置浏览器'), '等待期要有明确的加载文案')
+    assert.match(client, /autoPhase === 'pending'/, '渲染必须区分"等待/加载"与"未启动"两种状态')
     // 传输层：失败请求也要起空闲计时（否则浏览器被拉起后永不退场）
     const transport = readFileSync(fileURLToPath(new URL('../src/transport.ts', import.meta.url)), 'utf8')
     assert.ok(

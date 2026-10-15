@@ -228,6 +228,14 @@ white-space:pre-wrap;word-break:break-word}
 .dsw-models .id{color:var(--fg3);font-size:12px;margin-top:2px;word-break:break-word}
 /* 说明文字：限宽 64ch —— 满宽的一行小字读起来很累，且会拖长整张卡。 */
 .dsw-hint{color:var(--fg3);font-size:12px;line-height:1.7;margin:var(--sp-3) 0 0;max-width:64ch}
+/**
+ * 加载转圈：重启 DSH 后「网页版」页签要等几秒才装回登录态，
+ * 空着或显示「未启动」会让用户以为"自动启动开关没生效"（实测反馈）。
+ */
+.dsw-spin{width:22px;height:22px;border-radius:50%;box-sizing:border-box;
+  border:2px solid color-mix(in srgb,var(--fg3) 28%,transparent);border-top-color:var(--fg3);
+  animation:dsw-spin .9s linear infinite}
+@keyframes dsw-spin{to{transform:rotate(360deg)}}
 
 /* ── 设置项 + 卡片盒（0.8.0）：对齐 Our Free Model 的设置页 ────────────────
    改造前是横排的「label · 控件 · value」：一行里三样东西抢宽度，
@@ -582,10 +590,14 @@ function WebLoginPlaceholder(props?: { sessionId?: string }): any {
       void (async () => {
         try {
           const settings = await api('/browser/settings')
-          if (settings?.autoStart === false) return
+          if (settings?.autoStart === false) {
+            setAutoPhase('off')
+            return
+          }
           const claim = await api('/browser/claim-autostart', { method: 'POST', body: '{}' })
           if (claim?.claimed !== true) {
             console.log('[deepseek-web: guest] 自动挂载未认领到（别的窗口负责）')
+            setAutoPhase('off')
             return
           }
           /**
@@ -597,7 +609,10 @@ function WebLoginPlaceholder(props?: { sessionId?: string }): any {
            * `requestIdleCallback` 保证"UI 自己的活先干完"；超时 8 秒兜底（别永远不挂）。
            */
           const launch = () => {
-            void guestBrowser.start()
+            void guestBrowser.start().then((next) => {
+              // 挂上了 ⇒ 以后交给运行态；没挂上（失败）⇒ 退回启动卡（带原因）
+              setAutoPhase(next?.running === true ? 'done' : 'off')
+            })
           }
           const idle = (globalThis as { requestIdleCallback?: (cb: () => void, options?: { timeout?: number }) => number })
             .requestIdleCallback
@@ -605,6 +620,7 @@ function WebLoginPlaceholder(props?: { sessionId?: string }): any {
           else window.setTimeout(launch, 3_000)
         } catch (error) {
           console.warn('[deepseek-web: guest] 自动挂载失败：', error)
+          setAutoPhase('off')
         }
       })()
     }
@@ -631,6 +647,13 @@ function WebLoginPlaceholder(props?: { sessionId?: string }): any {
   void props?.sessionId
   ensurePanelStyles()
   const running = status?.running === true
+  /**
+   * `pending` = "该自动挂，但还在等 UI 空闲 / 正在挂"。
+   *
+   * 这段窗口期（空闲等待 + 申请 guest + 加载页面，可能十几秒）**必须显示加载态**，
+   * 不能显示"未启动 + 启动按钮"—— 那会让用户误以为自动启动开关没生效（实测反馈）。
+   */
+  const [autoPhase, setAutoPhase] = useState<'pending' | 'off' | 'done'>('pending')
   const busy = status?.state === 'idle' && (status?.beats ?? 0) === 0 && status?.error === undefined
     ? false
     : status?.running === true
@@ -644,7 +667,51 @@ function WebLoginPlaceholder(props?: { sessionId?: string }): any {
           ? '页面被导航走（会带回）'
           : '探测不到页面'
   const children: any[] = []
-  if (!running) {
+  if (!running && autoPhase === 'pending') {
+    // 加载态：转圈 + 说清在干什么（别让用户以为开关没生效）
+    children.push(
+      createElement(
+        'div',
+        {
+          key: 'loading',
+          style: {
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '10px',
+            color: 'var(--dsw-alias-fg-muted, #888)',
+          },
+        },
+        createElement('div', { key: 'spinner', className: 'dsw-spin' }),
+        createElement(
+          'div',
+          { key: 'text', style: { fontSize: '13px' } },
+          '正在恢复内置浏览器…',
+        ),
+        createElement(
+          'div',
+          {
+            key: 'sub',
+            style: { fontSize: '12px', textAlign: 'center', maxWidth: '420px', lineHeight: 1.8 },
+          },
+          '会用上次的登录态自动打开（几秒就好）。也可以直接在这里等，不用点任何按钮。',
+        ),
+        createElement(
+          'button',
+          {
+            key: 'skip',
+            type: 'button',
+            className: 'dsw-btn ghost',
+            style: { fontSize: '12px' },
+            onClick: () => {
+              setAutoPhase('off')
+            },
+          },
+          '我要看启动卡片',
+        ),
+      ),
+    )
+  } else if (!running) {
     children.push(
       createElement(
         'div',
