@@ -1068,7 +1068,27 @@ function Panel(): any {
         '「从已登录窗口恢复」= 复用上次登录过的窗口分区直接取凭证（免重新登录），凭证丢失时用它救急。',
       ),
     )
-    acctStatusPane.append(loginCard, accountCard)
+    /**
+     * 登录态失效时的**推荐做法**（用户明确要求在这里提示）。
+     *
+     * 为什么推内置浏览器：登录动作发生在 DSH 自带的 Chromium 里，插件只是**读回**它的
+     * 登录态（token 一换立刻可用）—— 不开新浏览器窗口，也不用反复打 API 探活请求。
+     */
+    const guestHint = el('div', 'dsw-card')
+    const guestHintTitle = el('div', 'dsw-hint', '登录态失效怎么办：直接在内置浏览器里登录')
+    guestHintTitle.style.fontWeight = '600'
+    guestHintTitle.style.marginBottom = '6px'
+    guestHint.append(
+      guestHintTitle,
+      el(
+        'div',
+        'dsw-hint',
+        '主界面的「网页版」页签就是内置浏览器。在那里登录一次，插件会自动把 token 同步进账号库，' +
+          '立刻就能用（不用再点「重新登录」开浏览器窗口，也不用反复打探活请求）。' +
+          '担心封号时，这条是最省的做法：它借的是 DSH 自己的浏览器内核。',
+      ),
+    )
+    acctStatusPane.append(loginCard, accountCard, guestHint)
 
     // ── 账号库：多账号并存 + 一键切换 ────────────────────────────────
     // 为什么值得有：以前换号的代价是「退出 → 清浏览器分区 → 重新登录 → 等捕获」，

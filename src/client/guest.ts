@@ -470,8 +470,33 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
                 vw: Number((observed as Record<string, unknown>).vw ?? 0),
                 vh: Number((observed as Record<string, unknown>).vh ?? 0),
                 dpr: String((observed as Record<string, unknown>).dpr ?? ''),
-                textLen: Number((observed as Record<string, unknown>).textLen ?? 0),
-                imgs: String((observed as Record<string, unknown>).imgs ?? ''),
+                // 登录态回读（host 会拿去跟账号库对账；httpOnly cookie 读不到，如实为空）
+                ...(function buildSession() {
+                  const seen2 = observed as Record<string, unknown>
+                  const token = String(seen2.userToken ?? '').trim()
+                  if (!token) return {}
+                  const hif = (seen2.hif ?? {}) as Record<string, unknown>
+                  const info = (seen2.info ?? {}) as Record<string, unknown>
+                  const unwrap = (value: unknown): string => {
+                    const raw = String(value ?? '')
+                    if (!raw) return ''
+                    try {
+                      const parsed = JSON.parse(raw)
+                      return typeof parsed === 'string' ? parsed : raw
+                    } catch {
+                      return raw
+                    }
+                  }
+                  return {
+                    session: {
+                      token,
+                      hifLeim: unwrap(hif.hif_leim_cached).slice(0, 1024),
+                      hifDliq: unwrap(hif.hif_dliq_cached).slice(0, 1024),
+                      userId: String(info.id ?? '').slice(0, 128),
+                      email: String(info.email ?? '').slice(0, 200),
+                    },
+                  }
+                })(),
                 ...(targetRect
                   ? { box: { w: Math.round(targetRect.width), h: Math.round(targetRect.height) } }
                   : {}),

@@ -43,6 +43,21 @@ export interface GuestFingerprint {
   imgs?: string
 }
 
+/**
+ * 从 guest 页面**回读**的登录态（只有页面里才有的东西）。
+ *
+ * ⚠️ httpOnly cookie 读不到（浏览器安全模型）⇒ 这里只有 token 与 hif_* 那几个头；
+ * host 同步时**保留账号库里已有的 cookie / UA / hifDliq**，只换 token 与能读到的头。
+ */
+export interface GuestSession {
+  token: string
+  hifLeim: string
+  hifDliq: string
+  /** 站点自己的用户 id（`__appKit_userInfo`），用来判断"这是哪个号" */
+  userId: string
+  email: string
+}
+
 export interface GuestBeat {
   state: GuestBeatState
   /** 面板侧探测时刻（ms） */
@@ -55,6 +70,13 @@ export interface GuestBeat {
   recoveries: number
   /** 说明（异常时给排查用） */
   note?: string
+  /**
+   * 页面里读到的登录态（host 会用它跟账号库对账/同步）。
+   *
+   * 🔴 这一条是"内置浏览器登录 → 插件可用"的关键：用户在 guest 里登录后，
+   * 账号库里还是旧 token ⇒ 插件发请求报「API 密钥无效」。见 index.ts 的 syncGuestSession。
+   */
+  session?: GuestSession
   /**
    * 页面眼里的环境（探针顺带带回）。🔴 落盘到 `diagnostics/guest-fingerprint.jsonl`
    * —— 网页端弹不弹「使用环境异常」只有页面自己知道，**凭这个对账，不猜**。
@@ -120,6 +142,21 @@ export function normalizeGuestBeat(raw: unknown): GuestBeat | null {
       }
     }
   }
+  let session: GuestSession | undefined
+  const rawSession = input.session
+  if (rawSession && typeof rawSession === 'object') {
+    const src = rawSession as Record<string, unknown>
+    const token = typeof src.token === 'string' ? src.token.trim().slice(0, 512) : ''
+    if (token) {
+      session = {
+        token,
+        hifLeim: typeof src.hifLeim === 'string' ? src.hifLeim.slice(0, 1024) : '',
+        hifDliq: typeof src.hifDliq === 'string' ? src.hifDliq.slice(0, 1024) : '',
+        userId: typeof src.userId === 'string' ? src.userId.slice(0, 128) : '',
+        email: typeof src.email === 'string' ? src.email.slice(0, 200) : '',
+      }
+    }
+  }
   return {
     state: state as GuestBeatState,
     at,
@@ -128,6 +165,7 @@ export function normalizeGuestBeat(raw: unknown): GuestBeat | null {
     recoveries: Number.isFinite(recoveries) && recoveries >= 0 ? Math.floor(recoveries) : 0,
     ...(note ? { note } : {}),
     ...(fingerprint ? { fingerprint } : {}),
+    ...(session ? { session } : {}),
   }
 }
 
@@ -145,6 +183,15 @@ export function guestProbeExpression(): string {
     "var raw=localStorage.getItem('userToken');" +
     'var t=raw;' +
     "try{var p=JSON.parse(raw);if(p&&typeof p==='object')t=p.value;}catch(e){}" +
+    // 登录态回读：hif_* 那几个缓存头 + 身份（后端拼请求要用，只有页面里才有）
+    'var hif={};' +
+    'try{for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);' +
+    'if(k&&k.indexOf("hif")===0){var v=String(localStorage.getItem(k)||"");' +
+    'if(v.length<1200)hif[k]=v;}}}catch(e){}' +
+    'var info={};' +
+    'try{var ui=localStorage.getItem("__appKit_userInfo");if(ui){' +
+    'var pu=JSON.parse(ui);var vu=(pu&&pu.value)?pu.value:pu;' +
+    'info={id:String((vu&&vu.id)||""),email:String((vu&&(vu.email||vu.mobile||vu.display))||"")};}}catch(e){}' +
     'var brands=(navigator.userAgentData&&navigator.userAgentData.brands||[])' +
     '.map(function(b){return b.brand;}).join(",");' +
     'var webgl="";' +
@@ -154,6 +201,7 @@ export function guestProbeExpression(): string {
     'return JSON.stringify({url:location.href,readyState:document.readyState,' +
     "userToken:(t===null||t===undefined)?'':String(t)," +
     'webdriver:navigator.webdriver===true,uaDataBrands:brands,webgl:webgl,' +
+    'hif:hif,info:info,' +
     'ua:String(navigator.userAgent),vw:window.innerWidth,vh:window.innerHeight,' +
     'dpr:String(window.devicePixelRatio),sw:String(screen.width),sh:String(screen.height),' +
     // 渲染完成度：用户截图里我这边"下半部分是白的"——必须能区分"还没加载完"与"尺寸不对"

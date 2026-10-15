@@ -101,6 +101,7 @@ import {
   readAccount,
   removeAccount,
   setActiveAccount,
+  upsertAccount,
   updateAccount,
 } from './accounts.ts'
 import {
@@ -124,12 +125,14 @@ import {
   transportSuspended,
 } from './transport.ts'
 import { pageSessionFromHeaders } from './page-session.ts'
+import { DEFAULT_WASM_URL } from './webapi.ts'
 import {
   DEFAULT_GUEST_SETTINGS,
   guestSessionHeaders,
   normalizeGuestBeat,
   normalizeGuestSettings,
   type GuestBeat,
+  type GuestSession,
   type GuestSettings,
 } from './guest-browser.ts'
 import {
@@ -205,6 +208,78 @@ function writeGuestSettings(next: unknown): GuestSettings {
     /* 写不进去就用内存里的值继续（下次读取会回默认） */
   }
   return settings
+}
+
+/**
+ * 用**内置浏览器里读到的登录态**同步账号库。
+ *
+ * ## 为什么需要（2026-10-15 用户实测）
+ * 用户在内置浏览器里登录成功了，但插件发请求仍报「API 密钥无效」—— 因为 guest 有自己的分区，
+ * 账号库里还是那份旧 token。页面里能读到的只有 token 与 `hif_*` 头（httpOnly cookie 读不到），
+ * 而**鉴权只用 token**（`WebAuth` 的实测结论：缺 cookie 本身合法）⇒ 只换 token 就够。
+ *
+ * ## 保守边界
+ * 身份对得上就更新那条；身份对不上但库里已有同 token 的也更新；都没有就**入库并切换**
+ * （用户是在内置浏览器里登的，当然是要用它）。token 没变则什么都不做（避免每 60 秒写盘）。
+ */
+export function syncGuestSession(session: GuestSession): { action: string; accountId?: string; email?: string; at: string } {
+  const token = session.token.trim()
+  const at = new Date().toISOString()
+  // 空 token 直接不动：`upsertAccount` 对空 token 会返回 undefined（parseAccount 要求非空），
+  // 继续走下去会读 `.id` 崩掉，而且脏数据不该进账号库
+  if (!token) return { action: 'same', at }
+  const accounts = listAccounts()
+  const match =
+    (session.userId
+      ? accounts.find((item) => item.serverId === session.userId || item.user?.id === session.userId)
+      : undefined) ?? accounts.find((item) => item.token === token)
+  const base = match ?? accounts.find((item) => item.id === activeAccountId())
+
+  if (base && base.token === token && (!session.hifLeim || base.hifLeim === session.hifLeim)) {
+    return { action: 'same', accountId: base.id, at }
+  }
+
+  const auth: WebAuth = {
+    token,
+    cookie: base?.cookie ?? '',
+    hifDliq: session.hifDliq || base?.hifDliq || '',
+    hifLeim: session.hifLeim || base?.hifLeim || '',
+    wasmUrl: base?.wasmUrl ?? DEFAULT_WASM_URL,
+    userAgent: base?.userAgent ?? '',
+    ...(base?.extraHeaders ? { extraHeaders: base.extraHeaders } : {}),
+    capturedAt: at,
+  }
+  const patch = session.userId ? { serverId: session.userId } : {}
+
+  if (match) {
+    upsertAccount(auth, { id: match.id, ...patch })
+    return { action: 'updated', accountId: match.id, email: session.email, at }
+  }
+  /**
+   * 库里没有这个身份时**分两种**（用例抓出来的 bug）：
+   *  - 页面给了身份（userId）⇒ 那是**另一个号**：入库 + 切换。
+   *    否则会把当前账号的 token 覆盖成别人的 —— 那是"张冠李戴"，比不同步更糟。
+   *  - 页面没给身份 ⇒ 只能保守地更新当前账号（没有依据新建）。
+   */
+  if (session.userId || !base) {
+    /**
+     * 新号**不许继承别的号的 cookie**（那是张冠李戴：cookie 属于那个会话，不属于这个号）。
+     * UA 可以继承 —— 那是浏览器属性，同一台机器同一个浏览器。
+     */
+    const fresh: WebAuth = {
+      ...auth,
+      cookie: '',
+      hifDliq: session.hifDliq || '',
+      hifLeim: session.hifLeim || '',
+      userAgent: base?.userAgent ?? '',
+    }
+    const record = upsertAccount(fresh, patch)
+    if (!record) return { action: 'same', at }
+    setActiveAccount(record.id)
+    return { action: 'added', accountId: record.id, email: session.email, at }
+  }
+  upsertAccount(auth, { id: base.id })
+  return { action: 'updated', accountId: base.id, email: session.email, at }
 }
 
 function normalizeLogger(logger: any): Logger {
@@ -322,6 +397,8 @@ let lastGuestFingerprintLine = ''
  * 认领位在本进程内，第一个问的窗口拿到 `claimed: true`，其余一律 false。
  */
 let guestAutoStartClaimed = false
+/** 上一次"内置浏览器登录态 → 账号库"同步的结果（面板要看）。 */
+let guestSyncInfo: { action: string; accountId?: string; email?: string; at: string } | null = null
 let lastGuestErrorLine = ''
 
 export function apply(ctx: any, config: Config = {}): void {
@@ -1599,6 +1676,23 @@ export function apply(ctx: any, config: Config = {}): void {
               guestBeat = beat
               // 🔴 指纹落盘（变化才写）：「使用环境异常」弹不弹只有页面自己知道，
               //    host 没有运行日志（logs/ 只有 crash），不落盘就永远对不了账。
+              // 🔴 内置浏览器里登上了 ⇒ 把登录态同步进账号库（否则插件发请求还是用旧 token）
+              if (beat.session) {
+                try {
+                  const sync = syncGuestSession(beat.session)
+                  guestSyncInfo = sync
+                  if (sync.action !== 'same') {
+                    logger.info?.(
+                      `deepseek-web: 内置浏览器登录态已同步（${sync.action} ${sync.accountId ?? ''}${
+                        sync.email ? ' · ' + sync.email : ''
+                      }）`,
+                    )
+                  }
+                } catch (error: any) {
+                  logger.warn?.(`deepseek-web: 内置浏览器登录态同步失败：${error?.message ?? error}`)
+                }
+              }
+
               // 非正常状态的心跳（含面板侧启动失败的具体原因）单独留痕 ——
               // 面板上的报错只有用户看得见，排不动问题；落盘之后一条命令就能查。
               // ⚠️ 用户明确要求过「不要过程文档」，所以这与 guest-fingerprint 一样是**诊断数据**，
@@ -1788,6 +1882,8 @@ export function apply(ctx: any, config: Config = {}): void {
                   transportHeartbeat: transportHeartbeatSnapshot() ?? null,
                   // 内置浏览器（guest）最近一次心跳：面板报上来、host 校验后留痕
                   guest: guestBeat,
+                  // 内置浏览器登录态 → 账号库的同步结果（面板据此提示"已同步/已切换到新号"）
+                  guestSync: guestSyncInfo,
                   contextMode,
                   contextChain: contextChainInfo() ?? null,
                   version: pluginVersion(),

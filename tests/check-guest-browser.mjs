@@ -167,7 +167,11 @@ async function main() {
     const seen = runProbe({
       location: { href: 'https://chat.deepseek.com/' },
       document: { readyState: 'complete' },
-      localStorage: { getItem: () => 'T' },
+      localStorage: {
+        getItem: (key) => (key === 'hif_leim_cached' ? '"L-1"' : 'T'),
+        length: 1,
+        key: () => 'hif_leim_cached',
+      },
       navigator: {
         webdriver: true,
         userAgentData: { brands: [{ brand: 'Electron' }, { brand: 'Chromium' }] },
@@ -179,6 +183,9 @@ async function main() {
     assert.equal(seen.vw, 1280, '视口宽要带回（排查"大小不对"的唯一依据）')
     assert.equal(seen.vh, 800, '视口高要带回')
     assert.equal(String(seen.ua).length > 0, true, 'ua 必须真的带回（第一版漏了这个字段，落盘一直是空串）')
+    // 登录态回读：hif_* 与身份（"在内置浏览器登录 → 插件可用"靠它）
+    assert.ok(seen.hif && typeof seen.hif === 'object', 'hif_* 缓存头必须带回')
+    assert.ok(seen.info && typeof seen.info === 'object', '身份必须带回')
   })
 
   await test('心跳形状：fingerprint 字段收窄（非对象丢弃、字符串截断、webdriver 只认 true）', () => {
