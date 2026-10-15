@@ -884,7 +884,7 @@ function Panel(): any {
       autoLabel.style.display = 'flex'
       autoLabel.style.gap = '6px'
       autoLabel.style.alignItems = 'center'
-      autoLabel.append(autoBox, document.createTextNode('重启 DSH 后自动启动（只在一个窗口里挂）'))
+      autoLabel.append(autoBox, document.createTextNode('打开「网页版」页签时自动启动（不拖慢 DSH 启动，且只在一个窗口里挂）'))
       void api('/browser/settings').then((result) => {
         autoBox.checked = result?.autoStart !== false
       })
