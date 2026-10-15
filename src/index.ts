@@ -128,6 +128,7 @@ import { pageSessionFromHeaders } from './page-session.ts'
 import { DEFAULT_WASM_URL } from './webapi.ts'
 import {
   DEFAULT_GUEST_SETTINGS,
+  chooseSessionAuthority,
   guestSessionHeaders,
   normalizeGuestBeat,
   normalizeGuestSettings,
@@ -194,7 +195,7 @@ function guestStoragePath(): string {
   return join(webLoginDir(), 'guest-storage.json')
 }
 
-function readGuestStorage(): { storage?: Record<string, string>; cookie?: string } | undefined {
+function readGuestStorage(): { storage?: Record<string, string>; cookie?: string; at?: string } | undefined {
   try {
     const file = guestStoragePath()
     if (!existsSync(file)) return undefined
@@ -203,7 +204,8 @@ function readGuestStorage(): { storage?: Record<string, string>; cookie?: string
     const storage = normalizeGuestStorage((parsed && parsed.storage) ?? parsed)
     const cookie = parsed && typeof parsed.cookie === 'string' ? parsed.cookie.slice(0, 4096) : undefined
     if (!storage && !cookie) return undefined
-    return { ...(storage ? { storage } : {}), ...(cookie ? { cookie } : {}) }
+    const at = parsed && typeof parsed.at === 'string' ? parsed.at : undefined
+    return { ...(storage ? { storage } : {}), ...(cookie ? { cookie } : {}), ...(at ? { at } : {}) }
   } catch {
     return undefined
   }
@@ -1686,6 +1688,8 @@ export function apply(ctx: any, config: Config = {}): void {
                 // 页面自己的 localStorage 快照 + 可见 cookie（分区不持久化 ⇒ 靠它们把登录态装回去）
                 storage: readGuestStorage()?.storage ?? null,
                 cookie: readGuestStorage()?.cookie ?? '',
+                // 谁新用谁：快照比账号库新 ⇒ 安装时以快照里的 userToken 为准
+                authority: chooseSessionAuthority(readGuestStorage()?.at, account.capturedAt),
                 ...(writes.length ? {} : { error: '这个账号没有 token（重新登录一次再试）' }),
               })
               return

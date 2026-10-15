@@ -25,6 +25,7 @@ import {
   GUEST_BROWSER_URL,
   guestFingerprintFix,
   guestProbeExpression,
+  chooseSessionAuthority,
   guestSessionFromObservation,
   needsViewportFix,
   normalizeGuestSettings,
@@ -400,6 +401,32 @@ async function main() {
     const bad = run('about:blank')
     assert.equal(bad.wrongOrigin, true, 'about:blank 必须被判为源不对')
     assert.equal(bad.cookiesWritten, 0, '源不对时不许写 cookie')
+  })
+
+  await test('🔴 谁新用谁：快照比账号库新 ⇒ 以快照为准（否则新登录会被旧 token 踢掉）', () => {
+    const older = '2026-10-11T09:17:59.721Z'
+    const newer = '2026-10-15T12:28:28.517Z'
+    assert.equal(chooseSessionAuthority(newer, older), 'snapshot', '快照新 ⇒ 听快照')
+    assert.equal(chooseSessionAuthority(older, newer), 'account', '账号库新 ⇒ 听账号库')
+    assert.equal(chooseSessionAuthority(older, older), 'account', '同时刻保守听账号库')
+    assert.equal(chooseSessionAuthority(undefined, older), 'account', '没有快照时间 ⇒ 听账号库')
+    assert.equal(chooseSessionAuthority(newer, undefined), 'snapshot', '没有账号时间 ⇒ 只能听快照')
+    assert.equal(chooseSessionAuthority('坏值', '坏值'), 'account', '坏值不猜')
+  })
+
+  await test('契约：authority=snapshot 时不许用账号的 token 覆盖快照；崩溃后有上限地自动重挂', () => {
+    const guest = readFileSync(fileURLToPath(new URL('../src/client/guest.ts', import.meta.url)), 'utf8')
+    // 覆盖禁用：两个 token 键必须在 preferSnapshot 时被跳过
+    assert.ok(guest.includes("const preferSnapshot = session?.authority === 'snapshot'"), '要读 authority')
+    assert.ok(
+      /if \(preferSnapshot && tokenKeys\.has\(write\.key\)\) continue/.test(guest),
+      'preferSnapshot 时必须跳过账号的 token 键（不许覆盖快照）',
+    )
+    assert.ok(guest.includes("new Set(['userToken', 'hif_leim_cached'])"), '要覆盖的键就这两个')
+    // 自动重挂：上限 3 次 + 用户手动停过就不再拉起
+    assert.ok(guest.includes('status.recoveries < 3'), '自动重挂要有上限（别无限重启）')
+    assert.ok(guest.includes('stoppedByUser = true'), '用户手动停过就不再自动拉起')
+    assert.ok(guest.includes('void startGuest()'), '重挂要复用 startGuest（不是对象方法）')
   })
 
   await test('🔴 guest 与传输层共用同一条登录态链（形状不许分叉）', () => {

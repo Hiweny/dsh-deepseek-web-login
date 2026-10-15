@@ -325,6 +325,26 @@ export function normalizeGuestStorage(raw: unknown): Record<string, string> | un
 }
 
 /**
+ * 装进页面的登录态该**听谁的**：页面自己的快照，还是账号库那份？
+ *
+ * 判据只有一个 —— **谁新用谁**（按时间戳）。场景：内置浏览器里刚登的新号，
+ * 心跳还没来得及同步（或同步失败）⇒ 账号库里还是旧 token ⇒
+ * 若让账号覆盖快照，每次重启都会把新登录踢掉（用户实测过"重启又要登录"）。
+ *
+ * 时间戳缺失时保守选 `account`（账号库是 API 那条路的权威）。
+ */
+export function chooseSessionAuthority(
+  snapshotAt: string | undefined,
+  accountCapturedAt: string | undefined,
+): 'snapshot' | 'account' {
+  const snap = Date.parse(String(snapshotAt ?? ''))
+  const acct = Date.parse(String(accountCapturedAt ?? ''))
+  if (!Number.isFinite(snap) || snap <= 0) return 'account'
+  if (!Number.isFinite(acct) || acct <= 0) return 'snapshot'
+  return snap > acct ? 'snapshot' : 'account'
+}
+
+/**
  * 视口与盒子是否**不一致**（2026-10-15 实测：guest 的视口尺寸是挂载那一刻定下来、
  * 之后容器变大不跟上 —— 落盘证据 `vw=996/box.w=995` 但 `vh=150/box.h=578`，
  * 表现是页面只渲染顶上一条、下面全白、内容被裁）。

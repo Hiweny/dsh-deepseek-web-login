@@ -65,6 +65,8 @@ export interface GuestSessionResult {
   storage?: Record<string, string> | null
   /** 上次存下来的页面可见 cookie（httpOnly 的拿不到；回写后页面才是登录态） */
   cookie?: string
+  /** 该听谁的：`snapshot` = 快照比账号库新（安装时以快照为准） */
+  authority?: 'snapshot' | 'account'
   error?: string
 }
 
@@ -210,6 +212,9 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
   let attaching = false
   /** 视口不一致的修正次数（有上限，避免无限重载）。 */
   let viewportFixes = 0
+  /** 崩溃后的自动重挂计时器 + 用户是否手动停过（手动停了就不自动拉起）。 */
+  let recoveryTimer: ReturnType<typeof setTimeout> | undefined
+  let stoppedByUser = false
   let beatSoonTimer: ReturnType<typeof setTimeout> | undefined
   /** 上一次装进页面的 userToken（防重载风暴用）。 */
   let lastInstalledToken = ''
@@ -257,7 +262,15 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
     for (const [key, value] of Object.entries(session?.storage ?? {})) {
       if (typeof value === 'string') merged.push({ key, value })
     }
+    /**
+     * 🔴 **谁新用谁**：快照比账号库新时（`authority === 'snapshot'`），账号派生的
+     * `userToken` / `hif_leim_cached` **不许覆盖**快照里的值 —— 否则"在内置浏览器刚登的新号"
+     * 会被账号库里那份旧 token 踢掉（用户实测过"重启又要登录"）。
+     */
+    const preferSnapshot = session?.authority === 'snapshot'
+    const tokenKeys = new Set(['userToken', 'hif_leim_cached'])
     for (const write of session?.writes ?? []) {
+      if (preferSnapshot && tokenKeys.has(write.key)) continue
       const index = merged.findIndex((item) => item.key === write.key)
       if (index >= 0) merged[index] = write
       else merged.push(write)
@@ -297,7 +310,9 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
     log(
       `guest：登录态已写入（键 ${merged.length} · cookie ${cookies.length} → 写回 ${
         String(parsed.cookiesWritten ?? '?')
-      } · 源 ${String(parsed.origin ?? '?')}${parsed.wrongOrigin ? ' ⚠️ 源不对，写了也白写' : ''}）`,
+      } · 源 ${String(parsed.origin ?? '?')} · 以${
+        preferSnapshot ? '页面快照' : '账号库'
+      }为准${parsed.wrongOrigin ? ' ⚠️ 源不对，写了也白写' : ''}）`,
     )
     if (parsed.wrongOrigin === true) {
       emit({ note: '登录态写在了错误的源上（about:blank）—— 写了也白写' })
@@ -524,7 +539,27 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
           log('guest：页面被导航走了 ⇒ 带回站点')
           await element.loadURL(GUEST_BROWSER_URL).catch(() => {})
         } else if (judged.state === 'dead') {
-          emit({ running: false, note: 'guest 探测不到（已停表，重新启动即可）' })
+          /**
+           * 🔴 崩溃/被关掉后**自动重挂**（有上限）。
+           *
+           * 用户实测：17:53 guest 死掉后一直停着，心跳停表，只能手动重启。
+           * 上限 3 次（`recoveries` 计入心跳，面板看得到）；用户手动 stop 过就不再自动拉起。
+           */
+          if (!stoppedByUser && status.recoveries < 3) {
+            emit({
+              running: false,
+              recoveries: status.recoveries + 1,
+              note: `guest 探测不到 ⇒ ${20} 秒后自动重挂（第 ${status.recoveries + 1} 次）`,
+            })
+            log('guest：探测不到 ⇒ 20 秒后自动重挂')
+            if (recoveryTimer !== undefined) clearTimeout(recoveryTimer)
+            recoveryTimer = setTimeout(() => {
+              recoveryTimer = undefined
+              void startGuest()
+            }, 20_000)
+          } else {
+            emit({ running: false, note: 'guest 探测不到（已停表，重新启动即可）' })
+          }
         }
         if (judged.state !== 'dead') emit({ recoveries: status.recoveries + 1 })
       }
@@ -563,17 +598,35 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
     }
   }
 
+  /**
+   * 启动（抽成局部函数：崩溃后的**自动重挂**也要调它，而对象方法在工厂内部不可见）。
+   */
+  async function startGuest(): Promise<GuestStatus> {
+    stoppedByUser = false
+    if (recoveryTimer !== undefined) {
+      clearTimeout(recoveryTimer)
+      recoveryTimer = undefined
+    }
+    if (status.running) return { ...status }
+    const ok = await attach().catch(async (error) => {
+      await reportFailure(`启动失败：${String((error as Error)?.message ?? error)}`)
+      return false
+    })
+    if (ok) schedule()
+    return { ...status }
+  }
+
   return {
     async start() {
-      if (status.running) return { ...status }
-      const ok = await attach().catch(async (error) => {
-        await reportFailure(`启动失败：${String((error as Error)?.message ?? error)}`)
-        return false
-      })
-      if (ok) schedule()
-      return { ...status }
+      return startGuest()
     },
     async stop() {
+      // 用户手动停 ⇒ 不再自动重挂（否则我关了它又自己起来）
+      stoppedByUser = true
+      if (recoveryTimer !== undefined) {
+        clearTimeout(recoveryTimer)
+        recoveryTimer = undefined
+      }
       await detach()
       return { ...status }
     },
