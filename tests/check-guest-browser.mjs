@@ -261,6 +261,11 @@ async function main() {
     //    （用户实测：看起来就是'一块突出来的白框'，而启动卡片被盖住了）
     assert.match(client, /const visible = rect !== null && running/, '宿主可见条件必须要求 guest 在跑')
     assert.match(client, /rect && running/, '定位同样只在跑的时候生效')
+    // 🔴 启动必须幂等 + 清孤儿：用户实测"页签里出现两份页面"（双击建了两个 webview，
+    //    内层是 flex 行 ⇒ 两个 100% 宽的 guest 并排各占一半）
+    const guestSrc = readFileSync(fileURLToPath(new URL('../src/client/guest.ts', import.meta.url)), 'utf8')
+    assert.match(guestSrc, /if \(attaching \|\| element \|\| status\.running\) return/, 'attach 必须有幂等闸门')
+    assert.match(guestSrc, /querySelectorAll\('webview'\)/, '建/删之前必须清掉宿主里的孤儿 guest')
     assert.ok(
       !/dsh-deepseek-guest-host[\s\S]{0,600}display: 'none'/.test(client),
       '宿主不许用 display:none 藏（会让 webview 停止布局）',

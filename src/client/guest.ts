@@ -189,6 +189,8 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
   let visible = false
   let timer: ReturnType<typeof setTimeout> | undefined
   let inFlight = false
+  /** 🔴 "正在建 guest"闸门：双击/两条路径同时触发会建出**两个** guest（页签里并排两页）。 */
+  let attaching = false
   /** 视口不一致的修正次数（有上限，避免无限重载）。 */
   let viewportFixes = 0
   let status: GuestStatus = {
@@ -257,6 +259,10 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
   }
 
   async function attach(): Promise<boolean> {
+    // 幂等：已经在跑、正在建、或已有一个元素存在，都不再建第二个
+    if (attaching || element || status.running) return status.running
+    attaching = true
+    try {
     const carrier = bridge()
     if (!carrier) {
       await reportFailure(
@@ -268,6 +274,15 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
     if (!node) {
       await reportFailure('浏览器宿主节点还没挂上（shell.overlay 未渲染）')
       return false
+    }
+    // 清掉宿主里可能残留的旧 guest（上一次失败/重复点击留下的孤儿）——
+    // 不清的话它们会和新 guest 并排显示（用户实测：页签里出现两份页面）
+    for (const stale of Array.from(node.querySelectorAll('webview'))) {
+      try {
+        stale.remove()
+      } catch {
+        /* ignore */
+      }
     }
     // 页签刚切过来时占位符可能还是初始高度；等它量出真实尺寸再建 guest
     await waitForUsableBox()
@@ -324,6 +339,9 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
     }
     emit({ running: true, error: undefined })
     return true
+    } finally {
+      attaching = false
+    }
   }
 
   async function detach(): Promise<void> {
@@ -332,6 +350,14 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
       timer = undefined
     }
     element?.remove()
+    // 宿主机里所有 guest 都清掉（含重复点击/失败留下的孤儿）—— 只删 element 会漏
+    for (const child of Array.from(hostNode?.querySelectorAll('webview') ?? [])) {
+      try {
+        child.remove()
+      } catch {
+        /* ignore */
+      }
+    }
     element = undefined
     activeElement = undefined
     const current = lease
