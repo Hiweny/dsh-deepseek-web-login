@@ -38,6 +38,9 @@ export interface GuestFingerprint {
   dpr?: string
   /** 宿主盒子（面板侧量出来的矩形）—— 与 `vw/vh` 比：相等就是 1:1，不等就有缩放 */
   box?: { w: number; h: number }
+  /** 正文长度 / 图片加载数（区分"没加载完"与"尺寸不对"） */
+  textLen?: number
+  imgs?: string
 }
 
 export interface GuestBeat {
@@ -93,6 +96,8 @@ export function normalizeGuestBeat(raw: unknown): GuestBeat | null {
       const vh = Number(raw.vh)
       const dpr = typeof raw.dpr === 'string' ? raw.dpr.slice(0, 12) : undefined
       let box: { w: number; h: number } | undefined
+      const textLen = Number(raw.textLen)
+      const imgs = typeof raw.imgs === 'string' ? raw.imgs.slice(0, 32) : undefined
       const rawBox = raw.box
       if (rawBox && typeof rawBox === 'object') {
         const w = Number((rawBox as Record<string, unknown>).w)
@@ -109,6 +114,8 @@ export function normalizeGuestBeat(raw: unknown): GuestBeat | null {
         ...(Number.isFinite(vw) && vw > 0 ? { vw: Math.floor(vw) } : {}),
         ...(Number.isFinite(vh) && vh > 0 ? { vh: Math.floor(vh) } : {}),
         ...(dpr ? { dpr } : {}),
+        ...(Number.isFinite(textLen) && textLen > 0 ? { textLen: Math.floor(textLen) } : {}),
+        ...(imgs ? { imgs } : {}),
         ...(box ? { box } : {}),
       }
     }
@@ -148,8 +155,13 @@ export function guestProbeExpression(): string {
     "userToken:(t===null||t===undefined)?'':String(t)," +
     'webdriver:navigator.webdriver===true,uaDataBrands:brands,webgl:webgl,' +
     'ua:String(navigator.userAgent),vw:window.innerWidth,vh:window.innerHeight,' +
-    'dpr:String(window.devicePixelRatio),sw:String(screen.width),sh:String(screen.height)});' +
-    "}catch(e){return JSON.stringify({url:location.href,readyState:'',userToken:'',webdriver:false,uaDataBrands:'',webgl:'',ua:'',vw:0,vh:0,dpr:'',sw:'',sh:''});}})()"
+    'dpr:String(window.devicePixelRatio),sw:String(screen.width),sh:String(screen.height),' +
+    // 渲染完成度：用户截图里我这边"下半部分是白的"——必须能区分"还没加载完"与"尺寸不对"
+    'textLen:(document.body&&document.body.innerText?document.body.innerText.length:0),' +
+    'imgs:(function(){var n=0,done=0,list=document.images||[];' +
+    'for(var i=0;i<list.length;i++){n++;if(list[i].complete&&list[i].naturalWidth>0)done++;}' +
+    'return n+"/"+done;})()});' +
+    "}catch(e){return JSON.stringify({url:location.href,readyState:'',userToken:'',webdriver:false,uaDataBrands:'',webgl:'',ua:'',vw:0,vh:0,dpr:'',sw:'',sh:'',textLen:0,imgs:''});}})()"
   )
 }
 

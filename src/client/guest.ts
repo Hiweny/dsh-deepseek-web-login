@@ -356,6 +356,8 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
                 vw: Number((observed as Record<string, unknown>).vw ?? 0),
                 vh: Number((observed as Record<string, unknown>).vh ?? 0),
                 dpr: String((observed as Record<string, unknown>).dpr ?? ''),
+                textLen: Number((observed as Record<string, unknown>).textLen ?? 0),
+                imgs: String((observed as Record<string, unknown>).imgs ?? ''),
                 ...(targetRect
                   ? { box: { w: Math.round(targetRect.width), h: Math.round(targetRect.height) } }
                   : {}),
