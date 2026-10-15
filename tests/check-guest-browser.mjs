@@ -427,6 +427,11 @@ async function main() {
     assert.ok(guest.includes('status.recoveries < 3'), '自动重挂要有上限（别无限重启）')
     assert.ok(guest.includes('stoppedByUser = true'), '用户手动停过就不再自动拉起')
     assert.ok(guest.includes('void startGuest()'), '重挂要复用 startGuest（不是对象方法）')
+    // 崩溃原因必须留痕（实测：只写"探测不到"查不出为什么死）
+    for (const ev of ["'crashed'", "'destroyed'", "'render-process-gone'"]) {
+      assert.ok(guest.includes(ev), `要监听 ${ev} 并记录原因`)
+    }
+    assert.ok(guest.includes('lastCrashReason'), '崩溃原因要能带进心跳说明')
   })
 
   await test('🔴 guest 与传输层共用同一条登录态链（形状不许分叉）', () => {

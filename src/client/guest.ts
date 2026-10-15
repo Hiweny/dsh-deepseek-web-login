@@ -215,6 +215,8 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
   /** 崩溃后的自动重挂计时器 + 用户是否手动停过（手动停了就不自动拉起）。 */
   let recoveryTimer: ReturnType<typeof setTimeout> | undefined
   let stoppedByUser = false
+  /** 最近一次崩溃原因（写进 dead 的说明里，免得只说"探测不到"）。 */
+  let lastCrashReason = ''
   let beatSoonTimer: ReturnType<typeof setTimeout> | undefined
   /** 上一次装进页面的 userToken（防重载风暴用）。 */
   let lastInstalledToken = ''
@@ -431,6 +433,25 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
     }
     created.addEventListener('did-finish-load', beatSoon)
     created.addEventListener('did-navigate', beatSoon)
+    /**
+     * 🔴 崩溃/被回收的原因要留痕。
+     *
+     * 实测（2026-10-15 20:33）：页面跑了 12 分钟后死掉，日志只有"探测不到"——
+     * 分不清是渲染进程崩了、被 OOM 回收、还是被关掉。这几个事件分别说明原因。
+     */
+    const noteCrash = (reason: string) => {
+      lastCrashReason = reason
+      log(`guest：${reason}`)
+      emit({ note: reason })
+    }
+    created.addEventListener('crashed', () => noteCrash('渲染进程崩溃（crashed）'))
+    created.addEventListener('destroyed', () => noteCrash('guest 元素被销毁（destroyed）'))
+    created.addEventListener('render-process-gone', (event: unknown) => {
+      const details = (event as { details?: { reason?: string; exitCode?: number } })?.details
+      noteCrash(
+        `渲染进程退出（reason=${String(details?.reason ?? '?')} code=${String(details?.exitCode ?? '?')}）`,
+      )
+    })
     node.appendChild(created)
     element = created
     activeElement = created
@@ -549,7 +570,9 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
             emit({
               running: false,
               recoveries: status.recoveries + 1,
-              note: `guest 探测不到 ⇒ ${20} 秒后自动重挂（第 ${status.recoveries + 1} 次）`,
+              note: `${
+                lastCrashReason ? `${lastCrashReason} ⇒ ` : 'guest 探测不到 ⇒ '
+              }20 秒后自动重挂（第 ${status.recoveries + 1} 次）`,
             })
             log('guest：探测不到 ⇒ 20 秒后自动重挂')
             if (recoveryTimer !== undefined) clearTimeout(recoveryTimer)
@@ -558,7 +581,10 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
               void startGuest()
             }, 20_000)
           } else {
-            emit({ running: false, note: 'guest 探测不到（已停表，重新启动即可）' })
+            emit({
+              running: false,
+              note: `${lastCrashReason || 'guest 探测不到'}（已停表，重新启动即可）`,
+            })
           }
         }
         if (judged.state !== 'dead') emit({ recoveries: status.recoveries + 1 })
