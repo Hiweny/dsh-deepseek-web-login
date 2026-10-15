@@ -205,6 +205,7 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
   let attaching = false
   /** 视口不一致的修正次数（有上限，避免无限重载）。 */
   let viewportFixes = 0
+  let beatSoonTimer: ReturnType<typeof setTimeout> | undefined
   rectSettledHook = () => {
     if (element) void beatOnce()
   }
@@ -338,6 +339,22 @@ export function createGuestBrowser(deps: GuestDeps): GuestBrowser {
     created.addEventListener('dom-ready', () => {
       void created.executeJavaScript(guestFingerprintFix(pageUa)).catch(() => {})
     })
+    /**
+     * 🔴 页面加载/跳转一结束就**立刻**同步一次登录态（不等心跳，心跳最长 84 秒）。
+     *
+     * 为什么急：DSH 给 guest 的分区**不是持久化的**（`dsh-sidebar-browser-<uuid>`，无 `persist:`）
+     * ⇒ 重启后 storage 全清空；登录态只能靠"读回 token → 存进账号库 → 下次挂载时装回页面"续命。
+     * 用户刚登录就重启 DSH 的话，心跳可能还没跑过 ⇒ 状态就丢了。
+     */
+    const beatSoon = (): void => {
+      if (beatSoonTimer !== undefined) clearTimeout(beatSoonTimer)
+      beatSoonTimer = setTimeout(() => {
+        beatSoonTimer = undefined
+        void beatOnce()
+      }, 2_500)
+    }
+    created.addEventListener('did-finish-load', beatSoon)
+    created.addEventListener('did-navigate', beatSoon)
     node.appendChild(created)
     element = created
     activeElement = created
