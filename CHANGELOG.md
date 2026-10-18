@@ -2,7 +2,7 @@
 
 本项目大致遵循语义化版本；日期为本地时间。
 
-## 未发布 — Windows 上 transport profile 清理不再自锁启动
+## 1.0.3 — 2026-10-18（社区 PR：#22 传输层 EPERM、#20 未执行 shell 程序、#19 洞察移植）
 
 传输层每次启动前会清一遍 `web-login/transport-profile`。旧实现是一句
 `rmSync(PROFILE_DIR, { recursive: true, force: true })` —— 在 Windows 上它是个定时炸弹：
@@ -36,6 +36,23 @@ GPU / renderer / utility / network 若干），而 Windows 的 `TerminateProcess
 
 由 `tests/check-browser-transport.mjs` 的两条用例守着（`check-bundle` 另守"产物里
 旧写法真的没了"）。反向验证实测：把旧实现改回去，用例报的正是上面那句 `EPERM`。
+
+### 另两件（同一批社区贡献）
+
+- **#20（m4ku1337，closes #14）**：`looksLikeUnexecutedToolProgram` 以前只认 `tools.<name>(` 这种
+  PTC 程序体；issue #14 的现场是模型把**要执行的命令行**贴进 shell 语言标记的围栏当正文，
+  本轮零工具调用、正文又是完整句子收尾 ⇒ 两条判据都不满足 ⇒ 回合被判 completed
+  ⇒ 用户看到「它说了要去做，然后什么都没做」。
+  现在补了 **shell 语言围栏**判据（大小写 / `language-` 前缀 / 参数都认）+ 注释行识别
+  （`#`、`//`、`::`、`rem`、块注释），带 22 项用例。
+- **#19 的洞察（Reuv1n）**：Windows 上 headless Edge 可能把启动**交接给已有实例后自身退出**，
+  而浏览器仍在、`DevToolsActivePort` 稍后才写出来。旧代码一看 `exitCode !== null` 就返回
+  undefined ⇒ 上层报「调试端口未就绪」⇒ 传输层整个不可用（看着像超时，其实启动成功了）。
+  ⚠️ 那个 PR **只改了构建产物 `lib/index.js`**（下次 build 就没了），所以没有直接合；
+  这条洞察已落进 `src/browser-transport.ts`，EPERM 那半边由 #22 覆盖。
+
+**没合的两个**（#17 / #16）：都是 i18n 功能 PR（英语默认 + 俄语），
+属于产品决策且与当前界面改动冲突面很大，留给维护者单独评估，不随本版发布。
 
 ## 1.0.2 — 2026-10-15（滚动窗口限速：一次封号的事后分析）
 
