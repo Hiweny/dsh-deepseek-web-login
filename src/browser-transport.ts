@@ -280,7 +280,15 @@ async function waitForTransportDebugPort(
   const portFile = join(profileDir, 'DevToolsActivePort')
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) return undefined
+    /**
+     * 🔴 **不要**因为 launcher 进程退出就放弃（PR #19 的实测洞察，2026-10-15 报告）。
+     *
+     * Windows 上 `msedge.exe --headless` 可能把启动**交接给已有实例后自身退出**，
+     * 而浏览器仍在、`DevToolsActivePort` 稍后才写出来。旧写法一看 `exitCode !== null`
+     * 就返回 undefined ⇒ 上层报「调试端口未就绪」⇒ 传输层整个不可用（现象看起来像超时，
+     * 实际是启动成功却被判失败）。
+     * ⇒ 这里只靠**端口文件 + 截止时间**判定，launcher 的死活不参与。
+     */
     try {
       const port = parseDevToolsActivePort(readFileSync(portFile, 'utf8'))
       if (port) {
