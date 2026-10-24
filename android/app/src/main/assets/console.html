@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>DSH Web API</title>
+<style>
+  :root{
+    --bg:#f5f6fa; --card:#ffffff; --card2:#f0f2f8; --text:#12172a; --sub:#6b7385;
+    --line:rgba(18,23,42,.08); --accent:#7c5cff; --accent2:#22d3ee; --ok:#10b981; --warn:#f59e0b; --bad:#ef4444;
+    --shadow:0 6px 24px rgba(24,30,60,.08); --radius:18px;
+  }
+  body.dark{
+    --bg:#0b0e14; --card:#141926; --card2:#1b2130; --text:#e8ecf7; --sub:#8b95a8;
+    --line:rgba(255,255,255,.08); --accent:#a78bfa; --accent2:#22d3ee;
+    --shadow:0 8px 30px rgba(0,0,0,.45);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans SC",sans-serif;
+    font-size:14px;-webkit-font-smoothing:antialiased}
+  body{padding-bottom:env(safe-area-inset-bottom)}
+  .topbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:10px;
+    padding:calc(env(safe-area-inset-top) + 12px) 16px 12px;background:var(--bg);}
+  .topbar h1{font-size:17px;font-weight:700;margin:0;flex:1;letter-spacing:.2px}
+  .topbar .mark{width:26px;height:26px;flex:0 0 26px}
+  .hamb{width:38px;height:38px;border-radius:12px;background:var(--card);box-shadow:var(--shadow);
+    display:flex;align-items:center;justify-content:center;gap:3px;flex-direction:column;border:none}
+  .hamb i{display:block;width:16px;height:2px;border-radius:2px;background:var(--text);opacity:.75}
+  .pill{font-size:11px;padding:5px 10px;border-radius:999px;background:rgba(16,185,129,.12);color:var(--ok);
+    font-weight:600;display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+  .pill.off{background:rgba(239,68,68,.12);color:var(--bad)}
+  .dot{width:6px;height:6px;border-radius:50%;background:currentColor;box-shadow:0 0 0 3px rgba(16,185,129,.15)}
+  main{padding:2px 16px 96px;max-width:760px;margin:0 auto}
+  .page{display:none;animation:fade .22s ease}
+  .page.on{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .card{background:var(--card);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);margin-bottom:14px}
+  .card h2{font-size:13px;font-weight:600;margin:0 0 12px;color:var(--sub);letter-spacing:.4px;text-transform:uppercase}
+  .hero{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;border-radius:22px;
+    padding:18px;box-shadow:0 12px 30px rgba(124,92,255,.28);margin-bottom:14px;position:relative;overflow:hidden}
+  .hero:after{content:"";position:absolute;right:-30px;top:-40px;width:150px;height:150px;border-radius:50%;
+    background:rgba(255,255,255,.16)}
+  .hero .t{font-size:12px;opacity:.9}
+  .hero .addr{font-size:17px;font-weight:700;margin:6px 0 2px;word-break:break-all;font-family:ui-monospace,Menlo,monospace}
+  .hero .sub{font-size:11px;opacity:.85}
+  .row{display:flex;gap:10px}
+  .row>*{flex:1}
+  .stat{background:var(--card2);border-radius:14px;padding:12px}
+  .stat .k{font-size:11px;color:var(--sub)}
+  .stat .v{font-size:18px;font-weight:700;margin-top:3px}
+  .btn{border:none;border-radius:14px;padding:13px 14px;font-size:14px;font-weight:600;
+    background:var(--accent);color:#fff;width:100%;transition:transform .12s ease,opacity .12s}
+  .btn:active{transform:scale(.98);opacity:.9}
+  .btn.ghost{background:var(--card2);color:var(--text)}
+  .btn.danger{background:rgba(239,68,68,.14);color:var(--bad)}
+  .btn.small{padding:9px 12px;font-size:12px;width:auto}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .item{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--line)}
+  .item:last-child{border-bottom:none}
+  .item .lbl{font-size:13px}
+  .item .desc{font-size:11px;color:var(--sub);margin-top:3px;line-height:1.5}
+  .switch{width:46px;height:27px;border-radius:999px;background:var(--card2);position:relative;
+    transition:.2s;flex:0 0 46px;border:none}
+  .switch:after{content:"";position:absolute;width:21px;height:21px;border-radius:50%;background:#fff;top:3px;left:3px;
+    transition:.2s;box-shadow:0 1px 4px rgba(0,0,0,.25)}
+  .switch.on{background:var(--accent)}
+  .switch.on:after{left:22px}
+  input[type=range]{width:100%;-webkit-appearance:none;height:4px;border-radius:4px;background:var(--card2);outline:none}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;border-radius:50%;
+    background:var(--accent);box-shadow:0 2px 8px rgba(124,92,255,.5)}
+  input[type=text],input[type=password],select{width:100%;padding:11px 12px;border-radius:12px;border:1px solid var(--line);
+    background:var(--card2);color:var(--text);font-size:13px;outline:none}
+  .seg{display:flex;background:var(--card2);border-radius:12px;padding:3px;gap:3px}
+  .seg button{flex:1;border:none;background:transparent;color:var(--sub);padding:9px;border-radius:10px;font-size:12px;font-weight:600}
+  .seg button.on{background:var(--card);color:var(--text);box-shadow:0 2px 8px rgba(0,0,0,.12)}
+  .acc{display:flex;gap:10px;align-items:flex-start;padding:12px 0;border-bottom:1px solid var(--line)}
+  .acc:last-child{border-bottom:none}
+  .avatar{width:38px;height:38px;border-radius:12px;flex:0 0 38px;display:flex;align-items:center;justify-content:center;
+    font-weight:700;font-size:14px;color:#fff;background:linear-gradient(135deg,var(--accent),var(--accent2))}
+  .acc .n{font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px}
+  .tag{font-size:10px;padding:2px 7px;border-radius:999px;background:rgba(16,185,129,.14);color:var(--ok)}
+  .tag.bad{background:rgba(239,68,68,.14);color:var(--bad)}
+  .tag.wait{background:rgba(245,158,11,.14);color:var(--warn)}
+  .acc .m{font-size:11px;color:var(--sub);margin-top:4px;line-height:1.5}
+  .bars{display:flex;align-items:flex-end;gap:5px;height:80px;margin-top:8px}
+  .bars div{flex:1;background:linear-gradient(180deg,var(--accent),var(--accent2));border-radius:6px 6px 3px 3px;min-height:3px;opacity:.9}
+  .bars .lbl{font-size:9px;color:var(--sub);text-align:center;margin-top:5px}
+  pre.log{background:var(--card2);border-radius:12px;padding:12px;font-size:10.5px;line-height:1.55;
+    max-height:46vh;overflow:auto;white-space:pre-wrap;word-break:break-all;color:var(--sub);margin:0;
+    font-family:ui-monospace,Menlo,monospace}
+  .drawer{position:fixed;inset:0;z-index:60;pointer-events:none}
+  .drawer .mask{position:absolute;inset:0;background:rgba(6,8,14,.5);opacity:0;transition:.25s}
+  .drawer .panel{position:absolute;left:0;top:0;bottom:0;width:78%;max-width:300px;background:var(--card);
+    transform:translateX(-102%);transition:transform .28s cubic-bezier(.22,.8,.3,1);
+    padding:calc(env(safe-area-inset-top) + 20px) 14px 24px;box-shadow:12px 0 40px rgba(0,0,0,.3);
+    display:flex;flex-direction:column;gap:4px}
+  .drawer.on{pointer-events:auto}
+  .drawer.on .mask{opacity:1}
+  .drawer.on .panel{transform:none}
+  .drawer .brand{display:flex;align-items:center;gap:10px;padding:6px 8px 18px}
+  .drawer .brand b{font-size:15px}
+  .nav{display:flex;align-items:center;gap:12px;padding:13px 12px;border-radius:14px;color:var(--text);
+    font-size:14px;font-weight:500;border:none;background:transparent;width:100%;text-align:left}
+  .nav .ic{width:22px;text-align:center;font-size:15px;opacity:.85}
+  .nav.on{background:linear-gradient(135deg,rgba(124,92,255,.16),rgba(34,211,238,.12));color:var(--accent);font-weight:700}
+  .nav small{margin-left:auto;color:var(--sub);font-size:11px;font-weight:500}
+  .foot{margin-top:auto;font-size:11px;color:var(--sub);padding:12px;line-height:1.6}
+  .toast{position:fixed;left:50%;bottom:80px;transform:translate(-50%,20px);background:rgba(20,25,38,.96);color:#fff;
+    padding:11px 16px;border-radius:14px;font-size:12.5px;opacity:0;transition:.25s;z-index:80;pointer-events:none;max-width:80%}
+  .toast.on{opacity:1;transform:translate(-50%,0)}
+  .mono{font-family:ui-monospace,Menlo,monospace}
+  .hint{font-size:11px;color:var(--sub);line-height:1.6;margin-top:6px}
+  .chip{display:inline-block;font-size:11px;padding:5px 10px;border-radius:999px;background:var(--card2);color:var(--sub);margin:0 6px 6px 0}
+</style>
+</head>
+<body>
+<div class="drawer" id="drawer">
+  <div class="mask" onclick="closeDrawer()"></div>
+  <div class="panel">
+    <div class="brand">
+      <svg class="mark" width="26" height="26" viewBox="0 0 40 40"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#a78bfa"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs><path d="M20 3c1.4 9.6 6 14.2 15.6 15.6C26 20 21.4 24.6 20 34c-1.4-9.4-6-14-15.6-15.4C14 17.2 18.6 12.6 20 3z" fill="url(#g)"/></svg>
+      <b>DSH Web API</b>
+    </div>
+    <button class="nav on" data-page="home"><span class="ic">◎</span>仪表盘</button>
+    <button class="nav" data-page="accounts"><span class="ic">◉</span>账号<span id="navAcc" class="num"></span></button>
+    <button class="nav" data-page="model"><span class="ic">✦</span>模型</button>
+    <button class="nav" data-page="risk"><span class="ic">⛨</span>防风控</button>
+    <button class="nav" data-page="context"><span class="ic">⇄</span>上下文</button>
+    <button class="nav" data-page="look"><span class="ic">◐</span>外观</button>
+    <button class="nav" data-page="logs"><span class="ic">≡</span>日志</button>
+    <button class="nav" data-page="about"><span class="ic">ⓘ</span>关于</button>
+    <div class="foot" id="foot">—</div>
+  </div>
+</div>
+
+<div class="topbar">
+  <button class="hamb" onclick="openDrawer()"><i></i><i></i><i></i></button>
+  <h1 id="ttl">仪表盘</h1>
+  <span class="pill" id="pill"><span class="dot"></span><span id="pillT">运行中</span></span>
+</div>
+
+<main>
+  <!-- 仪表盘 -->
+  <section class="page on" id="p-home">
+    <div class="hero">
+      <div class="t">OpenAI 兼容接口</div>
+      <div class="addr" id="addr" onclick="copyAddr()">http://127.0.0.1:8787/v1</div>
+      <div class="sub" id="lanHint">点按复制 · 局域网可用</div>
+    </div>
+    <div class="grid2" style="margin-bottom:14px">
+      <div class="stat"><div class="k">今日调用</div><div class="v" id="sCalls">0</div></div>
+      <div class="stat"><div class="k">成功率</div><div class="v" id="sOk">—</div></div>
+      <div class="stat"><div class="k">最近耗时</div><div class="v" id="sLat">—</div></div>
+      <div class="stat"><div class="k">账号</div><div class="v" id="sAcc">0</div></div>
+    </div>
+    <div class="card">
+      <h2>服务</h2>
+      <div class="item">
+        <div><div class="lbl">引擎</div><div class="desc" id="dEngine">—</div></div>
+        <span class="tag" id="tEngine">—</span>
+      </div>
+      <div class="item">
+        <div><div class="lbl">当前账号</div><div class="desc" id="dAcc">—</div></div>
+        <button class="btn small ghost" onclick="go('accounts')">管理</button>
+      </div>
+      <div class="item">
+        <div><div class="lbl">闸门</div><div class="desc" id="dGate">—</div></div>
+      </div>
+      <div class="item">
+        <div><div class="lbl">会话槽</div><div class="desc" id="dSlot">—</div></div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" id="btnToggle" onclick="toggleService()">停止服务</button>
+        <button class="btn ghost" onclick="reloadPage()">重载网页</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>近 14 天用量</h2>
+      <div class="bars" id="bars"></div>
+      <div class="hint" id="usageHint">暂无调用记录</div>
+    </div>
+    <div class="card">
+      <h2>最近调用</h2>
+      <div id="recent" class="hint">—</div>
+    </div>
+  </section>
+
+  <!-- 账号 -->
+  <section class="page" id="p-accounts">
+    <div class="card">
+      <h2>登录态</h2>
+      <div class="hint">登录在「网页版」里完成：切到网页版 → 登录 chat.deepseek.com → 回到这里点「捕获登录态」。之后所有请求都只带 Bearer token（cookie 不参与鉴权），所以可以同时存多个账号。</div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" onclick="Android.captureLogin()">去登录</button>
+        <button class="btn ghost" onclick="captureNow()">捕获登录态</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn ghost" onclick="probeAll()">校验全部</button>
+        <button class="btn ghost" onclick="reloadPage()">重载网页</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>账号库 <span id="accCount" style="float:right;color:var(--sub);font-weight:500"></span></h2>
+      <div id="accList"><div class="hint">还没有账号，先在网页版登录并捕获。</div></div>
+    </div>
+    <div class="card">
+      <h2>凭证备份</h2>
+      <div class="row">
+        <button class="btn ghost" onclick="exportAcc()">导出</button>
+        <button class="btn ghost" onclick="importAcc()">导入</button>
+      </div>
+      <div class="hint">导出的文件含可完整登录的凭证（等同账号本身），别分享。</div>
+    </div>
+  </section>
+
+  <!-- 模型 -->
+  <section class="page" id="p-model">
+    <div class="card">
+      <h2>可用模型</h2>
+      <div id="models"></div>
+      <div class="hint">网页端只有「快速模式」一档：<b>deepseek-chat</b> 与 <b>deepseek-reasoner</b> 的差别只是 thinking_enabled 开关。旧 id（pro/expert/vision）会按别名回退。</div>
+    </div>
+    <div class="card">
+      <h2>默认生成策略</h2>
+      <div class="item"><div><div class="lbl">默认开启思考</div><div class="desc">请求没带 reasoning_effort / thinking 时用这个</div></div><button class="switch" id="swThink" onclick="flip('default_thinking',this)"></button></div>
+      <div class="item"><div><div class="lbl">默认联网搜索</div><div class="desc">search_enabled</div></div><button class="switch" id="swSearch" onclick="flip('default_search',this)"></button></div>
+      <div class="item"><div><div class="lbl">串行工具调用</div><div class="desc">协议提示「一次只调一个」，成功率更高</div></div><button class="switch" id="swSerial" onclick="flip('serial_tool_calls',this)"></button></div>
+    </div>
+    <div class="card">
+      <h2>接入示例</h2>
+      <pre class="log" id="curlDemo" style="max-height:none"></pre>
+    </div>
+  </section>
+
+  <!-- 防风控 -->
+  <section class="page" id="p-risk">
+    <div class="card">
+      <h2>请求节流</h2>
+      <div class="item"><div><div class="lbl">允许并发</div><div class="desc">默认串行：同账号并发生成会被限流，实测几分钟就会被限制 1 天</div></div><button class="switch" id="swConc" onclick="flip('allow_concurrent',this)"></button></div>
+      <div style="margin-top:14px">
+        <div class="lbl">两次调用间隔 <b id="vGap">2~4s</b></div>
+        <input type="range" id="rGapMin" min="0" max="30" step="1" oninput="gapChange()">
+        <div class="hint">区间内随机取值；固定间隔本身就是机器特征。</div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>会话清理</h2>
+      <div class="seg" id="segClean">
+        <button data-v="deferred">攒批（默认）</button>
+        <button data-v="immediate">立即</button>
+        <button data-v="keep">保留</button>
+      </div>
+      <div class="hint">网页端「每轮建一个临时会话、用完立刻删」是最强的机器特征。攒批 = 攒 6~10 个或等 60~120 秒集中删，删除之间再随机停顿。</div>
+      <div style="margin-top:14px">
+        <div class="lbl">攒批数量 <b id="vBatch">6~10</b></div>
+        <input type="range" id="rBatchMax" min="1" max="20" step="1" oninput="batchChange()">
+      </div>
+    </div>
+    <div class="card">
+      <h2>体量阀门</h2>
+      <div class="lbl">单次 prompt 上限 <b id="vChars">400000</b></div>
+      <input type="range" id="rChars" min="120000" max="1500000" step="20000" oninput="charsChange()">
+      <div class="hint">调高明显提高被限流风险：网页端无状态，每轮都要重发整段对话。长任务建议切「链式投喂」而不是抬高这个数。</div>
+      <div class="lbl" style="margin-top:14px">历史图片上限 <b id="vImgs">24</b></div>
+      <input type="range" id="rImgs" min="0" max="60" step="2" oninput="imgsChange()">
+    </div>
+    <div class="card">
+      <h2>自动换号</h2>
+      <div class="lbl">间隔 <b id="vSwitch">关闭</b></div>
+      <input type="range" id="rSwitch" min="0" max="120" step="5" oninput="switchChange()">
+      <div class="hint">⚠️ 几分钟换一个号是极强的机器特征，还会让服务商把多个账号关联起来。建议 0（关闭）或 30 分钟以上。</div>
+    </div>
+  </section>
+
+  <!-- 上下文 -->
+  <section class="page" id="p-context">
+    <div class="card">
+      <h2>投喂方式</h2>
+      <div class="seg" id="segCtx">
+        <button data-v="full">每轮全量</button>
+        <button data-v="chained">链式增量</button>
+      </div>
+      <div class="hint"><b>全量</b>：每轮重发整段转写（parent_message_id=null，稳）。<b>链式</b>：只发增量、历史交给服务端（省 token、更像真人，但工具协议只在链首那条消息里）。</div>
+    </div>
+    <div class="card">
+      <h2>会话复用</h2>
+      <div class="lbl">同一会话最多复用于 <b id="vReuse">20</b> 轮</div>
+      <input type="range" id="rReuse" min="0" max="50" step="1" oninput="reuseChange()">
+      <div class="hint">0 = 不复用（每轮新建会话）。复用能减少建删会话的动作。</div>
+    </div>
+    <div class="card">
+      <h2>断点续写</h2>
+      <div class="item"><div><div class="lbl">自动续写</div><div class="desc">回答在句中被截断时自动再发一轮，无缝拼进同一条回答</div></div><button class="switch" id="swCont" onclick="flip('auto_continue',this)"></button></div>
+      <div class="lbl">最多续写 <b id="vCont">2</b> 轮</div>
+      <input type="range" id="rCont" min="0" max="6" step="1" oninput="contChange()">
+    </div>
+    <div class="card">
+      <h2>容量</h2>
+      <div class="item"><div><div class="lbl">上下文窗口</div><div class="desc">仅用于对外声明 usage / 客户端换算</div></div><span class="mono" id="ctxWin">1,048,576</span></div>
+      <div class="hint">网页端不给这个字段，按 DeepSeek 标称 1M 取。</div>
+    </div>
+  </section>
+
+  <!-- 外观 -->
+  <section class="page" id="p-look">
+    <div class="card">
+      <h2>主题</h2>
+      <div class="seg" id="segTheme">
+        <button data-v="auto">跟随系统</button>
+        <button data-v="dark">深色</button>
+        <button data-v="light">浅色</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>悬浮球</h2>
+      <div class="item"><div><div class="lbl">显示悬浮球</div><div class="desc">四角星 ✦，可拖动、松手自动贴边、点开看状态</div></div><button class="switch" id="swBall" onclick="flip('float_ball',this)"></button></div>
+      <div style="margin-top:12px">配色</div>
+      <div id="palette" style="margin-top:8px"></div>
+    </div>
+    <div class="card">
+      <h2>接口</h2>
+      <div class="item"><div><div class="lbl">端口</div></div><input type="text" id="inPort" style="width:96px;text-align:center"></div>
+      <div class="item"><div><div class="lbl">API Key</div><div class="desc">请求头 Authorization: Bearer &lt;key&gt;</div></div></div>
+      <input type="text" id="inKey" class="mono">
+      <div class="item" style="margin-top:8px"><div><div class="lbl">校验 Key</div><div class="desc">关掉则本机任意请求都放行</div></div><button class="switch" id="swKey" onclick="flip('require_key',this)"></button></div>
+      <button class="btn" style="margin-top:12px" onclick="saveNet()">保存（需重启服务）</button>
+    </div>
+    <div class="card">
+      <h2>保活</h2>
+      <div class="item"><div><div class="lbl">电池优化白名单</div><div class="desc" id="dBat">—</div></div><button class="btn small ghost" onclick="Android.requestBatteryPerm()">去设置</button></div>
+      <div class="item"><div><div class="lbl">悬浮窗权限</div><div class="desc" id="dOv">—</div></div><button class="btn small ghost" onclick="Android.requestOverlayPerm()">去授权</button></div>
+      <div class="item"><div><div class="lbl">开机自启</div><div class="desc">开机 / 升级后自动拉起前台服务</div></div><button class="switch" id="swBoot" onclick="flip('auto_start',this)"></button></div>
+    </div>
+  </section>
+
+  <!-- 日志 -->
+  <section class="page" id="p-logs">
+    <div class="card">
+      <h2>运行日志</h2>
+      <div class="row" style="margin-bottom:10px">
+        <button class="btn ghost" onclick="loadLogs()">刷新</button>
+        <button class="btn ghost" onclick="Android.clearLogs();loadLogs()">清空</button>
+      </div>
+      <pre class="log" id="logBox">加载中…</pre>
+    </div>
+  </section>
+
+  <!-- 关于 -->
+  <section class="page" id="p-about">
+    <div class="card">
+      <h2>关于</h2>
+      <div class="item"><div class="lbl">版本</div><span class="mono" id="ver">—</span></div>
+      <div class="item"><div class="lbl">协议来源</div><div class="desc" style="text-align:right">dsh-deepseek-web-login<br>（PoW / SSE patch / 提示词工具协议）</div></div>
+      <div class="item"><div class="lbl">传输</div><div class="desc" style="text-align:right">WebView 内 fetch<br>真实 TLS 指纹 + 页面内解 PoW</div></div>
+    </div>
+    <div class="card">
+      <h2>风险说明</h2>
+      <div class="hint">这是网页端私有接口的非官方客户端。逆向网页端本身违反服务条款，风险是「判罚多严」而不是「会不会被抓到」。本应用按上游的做法降低了被识别为自动化的概率（页面内解 PoW、随机间隔、会话攒批清理、链式投喂），但这不构成不被封的保证。稳定性优先请用官方 API。</div>
+    </div>
+    <div class="card">
+      <h2>开源</h2>
+      <div class="hint">移植自 cv-superding/dsh-deepseek-web-login（Apache-2.0），Android 端由 Hiweny 实现。</div>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => Array.from(document.querySelectorAll(s));
+let S = {};      // 最新 state
+let CFG = {};    // 配置快照
+let page = 'home';
+
+function toast(m){ const t=$('#toast'); t.textContent=m; t.classList.add('on'); clearTimeout(window.__tt); window.__tt=setTimeout(()=>t.classList.remove('on'),1800); }
+function openDrawer(){ $('#drawer').classList.add('on'); }
+function closeDrawer(){ $('#drawer').classList.remove('on'); }
+window.__closeDrawer = closeDrawer;
+function go(p){ page=p; $$('.nav').forEach(b=>b.classList.toggle('on', b.dataset.page===p));
+  $$('.page').forEach(s=>s.classList.toggle('on', s.id==='p-'+p));
+  const names={home:'仪表盘',accounts:'账号',model:'模型',risk:'防风控',context:'上下文',look:'外观',logs:'日志',about:'关于'};
+  $('#ttl').textContent = names[p]||'仪表盘';
+  closeDrawer();
+  if(p==='logs') loadLogs();
+  if(p==='about') $('#ver').textContent = (S.version||'—');
+}
+$$('.nav').forEach(b=>b.onclick=()=>go(b.dataset.page));
+
+function fmtNum(n){ return (n||0).toLocaleString('en-US'); }
+function shortAddr(){ return 'http://127.0.0.1:'+(CFG.port||8787)+'/v1'; }
+
+function copyAddr(){
+  const a = shortAddr();
+  const ta=document.createElement('textarea'); ta.value=a; document.body.appendChild(ta); ta.select();
+  try{ document.execCommand('copy'); toast('已复制 '+a); }catch(e){ toast(a); }
+  ta.remove();
+}
+
+function render(){
+  const st = S.stats||{};
+  const running = !!st.running;
+  $('#pill').classList.toggle('off', !running);
+  $('#pillT').textContent = running ? '运行中' : '已停止';
+  $('#btnToggle').textContent = running ? '停止服务' : '启动服务';
+  $('#addr').textContent = shortAddr();
+  const lan = S.lanIp ? (' · 局域网 http://'+S.lanIp+':'+(CFG.port||8787)+'/v1') : '';
+  $('#lanHint').textContent = '点按复制' + lan;
+
+  const u = (S.usage&&S.usage.totals)||{};
+  $('#sCalls').textContent = fmtNum(u.calls||st.calls||0);
+  $('#sOk').textContent = (u.calls? Math.round((u.ok/u.calls)*100)+'%' : '—');
+  $('#sLat').textContent = st.lastLatencyMs ? (st.lastLatencyMs+'ms') : '—';
+  $('#sAcc').textContent = (S.accounts||[]).length;
+  $('#dEngine').textContent = (S.engine||'—') + (S.engineOverlay? ' · 后台执行' : '');
+  $('#tEngine').textContent = (S.engine||'').indexOf('就绪')===0 ? '就绪' : '等待';
+  $('#tEngine').className = 'tag ' + ((S.engine||'').indexOf('就绪')===0?'':'wait');
+  const act = (S.accounts||[]).find(a=>a.active);
+  $('#dAcc').textContent = act ? (act.label||act.userDisplay||'未命名') + ' · ' + (act.hasToken?('token '+act.tokenLen+' 字符'):'无 token') : '未登录';
+  $('#dGate').textContent = S.gate||'—';
+  $('#dSlot').textContent = S.slots||'—';
+
+  // 用量柱
+  const series = (S.usage&&S.usage.series)||[];
+  const max = Math.max(1, ...series.map(d=>d.calls||0));
+  $('#bars').innerHTML = series.slice(-14).map(d=>{
+    const h = Math.round(((d.calls||0)/max)*100);
+    const day = (d.date||'').slice(5);
+    return '<div style="flex:1"><div style="height:'+Math.max(3,h)+'%;background:linear-gradient(180deg,var(--accent),var(--accent2));border-radius:6px 6px 3px 3px"></div><div class="lbl">'+day+'</div></div>';
+  }).join('');
+  $('#usageHint').textContent = u.calls ? ('共 '+fmtNum(u.total)+' tokens · 输入 '+fmtNum(u.in)+' / 输出 '+fmtNum(u.out)) : '暂无调用记录';
+
+  $('#recent').innerHTML = (S.recent||[]).length
+    ? (S.recent||[]).slice(-6).reverse().map(o=>'<div style="padding:6px 0;border-bottom:1px solid var(--line)">'
+      + '<span style="color:'+(o.ok?'var(--ok)':'var(--bad)')+'">'+(o.ok?'✓':'✗')+'</span> '
+      + (o.model||'?')+' · '+(o.in||0)+'+'+(o.out||0)+' tok · '+new Date(o.at).toLocaleTimeString('zh-CN',{hour12:false})+'</div>').join('')
+    : '今天还没有调用';
+
+  $('#navAcc').textContent = (S.accounts||[]).length ? (S.accounts||[]).length : '';
+  $('#foot').innerHTML = 'v'+(S.version||'')+' · 端口 '+(CFG.port||8787)+'<br>'+((S.accounts||[]).length)+' 个账号 · '+((S.engine)||'');
+
+  // 账号
+  const accs = S.accounts||[];
+  $('#accCount').textContent = accs.length ? accs.length+' 个' : '';
+  $('#accList').innerHTML = accs.length ? accs.map(a=>{
+    const bad = a.stale || a.lastVerifyError;
+    const state = bad ? '<span class="tag bad">需重新登录</span>' : (a.unverified? '<span class="tag wait">未校验</span>' : '<span class="tag">正常</span>');
+    return '<div class="acc"><div class="avatar">'+((a.label||a.userDisplay||'D').slice(0,1).toUpperCase())+'</div>'
+      + '<div style="flex:1;min-width:0"><div class="n">'+(a.label||a.userDisplay||'未命名')+' '+(a.active?'<span class="tag">当前</span>':'')+' '+state+'</div>'
+      + '<div class="m">token '+a.tokenLen+' 字符 · '+a.cookieSummary+'</div>'
+      + (a.lastVerifyError? '<div class="m" style="color:var(--bad)">'+a.lastVerifyError.slice(0,60)+'</div>':'')
+      + '<div style="margin-top:8px;display:flex;gap:8px">'
+      + (a.active?'':'<button class="btn small ghost" onclick="setActive(\''+a.id+'\')">切换</button>')
+      + '<button class="btn small ghost" onclick="renameAcc(\''+a.id+'\')">备注</button>'
+      + '<button class="btn small danger" onclick="delAcc(\''+a.id+'\')">移除</button>'
+      + '</div></div></div>';
+  }).join('') : '<div class="hint">还没有账号，先在网页版登录并捕获。</div>';
+
+  // 配置控件
+  if (CFG.port) {
+    $('#addr').textContent = shortAddr();
+    $('#inPort').value = CFG.port;
+    $('#inKey').value = CFG.apiKey||'';
+    setSw('#swThink', CFG.defaultThinking); setSw('#swSearch', CFG.defaultSearch);
+    setSw('#swSerial', CFG.serialToolCalls); setSw('#swConc', CFG.allowConcurrent);
+    setSw('#swCont', CFG.autoContinue); setSw('#swBall', CFG.floatBall);
+    setSw('#swKey', CFG.requireKey); setSw('#swBoot', CFG.autoStart);
+    $('#rGapMin').max = 30; $('#rGapMin').value = Math.round((CFG.minRequestIntervalMs||2000)/1000);
+    $('#vGap').textContent = Math.round((CFG.minRequestIntervalMs||0)/1000)+'~'+Math.round((CFG.maxRequestIntervalMs||0)/1000)+'s';
+    $('#rChars').value = CFG.maxPromptChars||400000; $('#vChars').textContent = fmtNum(CFG.maxPromptChars||400000);
+    $('#rImgs').value = CFG.maxRefImages||24; $('#vImgs').textContent = CFG.maxRefImages||24;
+    $('#rBatchMax').value = CFG.cleanupBatchMax||10; $('#vBatch').textContent = (CFG.cleanupBatchMin||6)+'~'+(CFG.cleanupBatchMax||10);
+    $('#rReuse').value = CFG.sessionReuseTurns||20; $('#vReuse').textContent = CFG.sessionReuseTurns||0;
+    $('#rCont').value = CFG.maxContinuations||2; $('#vCont').textContent = CFG.maxContinuations||0;
+    $('#rSwitch').value = CFG.autoSwitchMinutes||0;
+    $('#vSwitch').textContent = (CFG.autoSwitchMinutes? CFG.autoSwitchMinutes+' 分钟':'关闭');
+    $('#ctxWin').textContent = fmtNum(CFG.contextWindow||1048576);
+    segSet('#segClean', CFG.sessionCleanup||'deferred');
+    segSet('#segCtx', CFG.contextMode||'full');
+    segSet('#segTheme', CFG.theme||'auto');
+    $('#curlDemo').textContent = 'curl http://127.0.0.1:'+(CFG.port||8787)+'/v1/chat/completions \\\n  -H "Content-Type: application/json" \\\n  -H "Authorization: Bearer '+(CFG.apiKey||'sk-dshweb')+'" \\\n  -d \'{"model":"deepseek-chat","stream":true,"messages":[{"role":"user","content":"你好"}]}\'';
+    const ov = S.overlay, bat = (S.battery||{}).ignoring;
+    $('#dOv').textContent = ov ? '已授权（后台可执行引擎）' : '未授权（引擎只能在打开 App 时可执行）';
+    $('#dBat').textContent = bat ? '已加入白名单' : '未加入（后台可能被系统冻结）';
+    renderPalette();
+    renderModels();
+  }
+}
+
+function renderModels(){
+  $('#models').innerHTML = ['deepseek-chat','deepseek-reasoner','deepseek-web'].map(m=>{
+    const d = m==='deepseek-chat' ? '直接作答 · 工具调用最稳' : m==='deepseek-reasoner' ? '先推理再回答（reasoning_content）' : '别名 · 按 chat 处理';
+    return '<div class="item"><div><div class="lbl mono">'+m+'</div><div class="desc">'+d+'</div></div></div>';
+  }).join('');
+}
+
+const PALETTE=[['violet','#a78bfa','#6d28d9'],['cyan','#22d3ee','#2563eb'],['mint','#34d399','#0ea5e9'],['amber','#fbbf24','#f97316'],['rose','#fb7185','#a855f7'],['ink','#64748b','#0f172a']];
+function renderPalette(){
+  $('#palette').innerHTML = PALETTE.map(p=>{
+    const on = (CFG.ballColor||'violet')===p[0];
+    return '<button onclick="pickColor(\''+p[0]+'\')" style="border:none;background:transparent;padding:0;margin:0 10px 0 0">'
+      + '<span style="display:inline-block;width:34px;height:34px;border-radius:12px;background:linear-gradient(135deg,'+p[1]+','+p[2]+');'
+      + 'box-shadow:'+(on?'0 0 0 3px var(--accent)':'none')+';"></span></button>';
+  }).join('');
+}
+function pickColor(c){ CFG.ballColor=c; save({ball_color:c}); renderPalette(); }
+function setSw(sel,on){ const e=$(sel); if(!e) return; e.classList.toggle('on', !!on); }
+function segSet(sel,v){ $$(sel+' button').forEach(b=>b.classList.toggle('on', b.dataset.v===v)); }
+function flip(key, el){ const on=!el.classList.contains('on'); el.classList.toggle('on',on); const o={}; o[key]=on; save(o); }
+function save(o){ try{ Android.save(JSON.stringify(o)); }catch(e){ toast('保存失败'); } Object.assign(CFG,o); }
+
+function gapChange(){ const v=+$('#rGapMin').value; $('#vGap').textContent = v+'~'+(v+2)+'s'; save({min_request_interval_ms:v*1000, max_request_interval_ms:(v+2)*1000}); }
+function batchChange(){ const v=+$('#rBatchMax').value; $('#vBatch').textContent = Math.max(1,v-4)+'~'+v; save({cleanup_batch_min:Math.max(1,v-4), cleanup_batch_max:v}); }
+function charsChange(){ const v=+$('#rChars').value; $('#vChars').textContent = fmtNum(v); save({max_prompt_chars:v}); }
+function imgsChange(){ const v=+$('#rImgs').value; $('#vImgs').textContent = v; save({max_ref_images:v}); }
+function reuseChange(){ const v=+$('#rReuse').value; $('#vReuse').textContent=v; save({session_reuse_turns:v}); }
+function contChange(){ const v=+$('#rCont').value; $('#vCont').textContent=v; save({max_continuations:v}); }
+function switchChange(){ const v=+$('#rSwitch').value; $('#vSwitch').textContent = v? v+' 分钟':'关闭'; save({auto_switch_minutes:v}); }
+
+$$('#segClean button').forEach(b=>b.onclick=()=>{ segSet('#segClean',b.dataset.v); save({session_cleanup:b.dataset.v}); });
+$$('#segCtx button').forEach(b=>b.onclick=()=>{ segSet('#segCtx',b.dataset.v); save({context_mode:b.dataset.v}); });
+$$('#segTheme button').forEach(b=>b.onclick=()=>{ segSet('#segTheme',b.dataset.v); save({theme:b.dataset.v}); applyTheme(b.dataset.v); });
+function applyTheme(t){
+  const sysDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const dark = t==='dark' || (t==='auto' && sysDark) || (t==='auto' && S.theme==='dark');
+  document.body.classList.toggle('dark', dark);
+}
+
+function toggleService(){ if(S.stats&&S.stats.running) Android.stopService(); else Android.startService(); setTimeout(refresh,700); }
+function reloadPage(){ Android.reloadPage(); toast('已请求重载页面'); }
+function captureNow(){ const r=JSON.parse(Android.captureNow()||'{}'); toast(r.msg||'已尝试捕获'); refresh(); }
+function probeAll(){ toast('正在校验…'); const r=JSON.parse(Android.probeAll()||'{}'); toast('校验完成：正常 '+r.ok+' / 异常 '+r.fail); refresh(); }
+function setActive(id){ Android.setActive(id); toast('已切换'); setTimeout(refresh,300); }
+function renameAcc(id){ const v=prompt('备注名'); if(v!==null){ Android.rename(id,v); refresh(); } }
+function delAcc(id){ if(confirm('移除这个账号？（本地凭证会被删除）')){ Android.remove(id); refresh(); } }
+function exportAcc(){ const s=Android.exportAccounts(); copyText(s); toast('已复制备份 JSON 到剪贴板'); }
+function importAcc(){ const s=prompt('粘贴备份 JSON'); if(s){ Android.importAccounts(s); toast('已导入'); refresh(); } }
+function copyText(s){ const ta=document.createElement('textarea'); ta.value=s; document.body.appendChild(ta); ta.select(); try{document.execCommand('copy');}catch(e){} ta.remove(); }
+function loadLogs(){ $('#logBox').textContent = Android.logs()||'(空)'; }
+
+async function refresh(){
+  try{
+    S = JSON.parse(Android.state()||'{}');
+    CFG = JSON.parse(Android.cfg()||'{}');
+    S.recent = JSON.parse(Android.recentCalls()||'[]');
+    applyTheme(CFG.theme||'auto');
+    render();
+  }catch(e){ console.error(e); }
+}
+window.__refresh = refresh;
+
+if (window.matchMedia) window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', ()=>applyTheme((CFG.theme)||'auto'));
+refresh(); setInterval(refresh, 2500);
+</script>
+</body>
+</html>
