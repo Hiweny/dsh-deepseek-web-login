@@ -113,22 +113,24 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: |
             set -x
-            APK=$(ls DSHWebAPI-*.apk | head -1)
+            APK=$(find . -name "*.apk" | head -1)
+            echo "APK=$APK"
             adb install -r "$APK"
             adb shell pm grant com.hiweny.dshweb android.permission.POST_NOTIFICATIONS || true
             adb shell am start -n com.hiweny.dshweb/.MainActivity
-            sleep 25
-            adb shell "run-as com.hiweny.dshweb ls files" || true
+            sleep 30
+            adb shell "run-as com.hiweny.dshweb cat files/dsh.log" | tail -40 || true
+            adb forward tcp:8787 tcp:8787
             echo "== /health =="
-            HEALTH=$(adb shell "curl -s -m 10 http://127.0.0.1:8787/health" || true)
-            echo "$HEALTH"
+            HEALTH=$(curl -s -m 20 http://127.0.0.1:8787/health) ; echo "$HEALTH"
             echo "== /v1/models =="
-            MODELS=$(adb shell "curl -s -m 10 http://127.0.0.1:8787/v1/models" || true)
-            echo "$MODELS"
+            MODELS=$(curl -s -m 20 http://127.0.0.1:8787/v1/models) ; echo "$MODELS"
             echo "== /api/status =="
-            adb shell "curl -s -m 10 http://127.0.0.1:8787/api/status" | head -c 1200 || true
+            curl -s -m 20 http://127.0.0.1:8787/api/status | head -c 1500 ; echo
+            echo "== /v1/chat/completions (expect auth error, no login) =="
+            curl -s -m 60 -X POST http://127.0.0.1:8787/v1/chat/completions               -H "Content-Type: application/json" -H "Authorization: Bearer sk-dshweb"               -d '{"model":"deepseek-chat","messages":[{"role":"user","content":"hi"}]}' | head -c 400 ; echo
             adb exec-out screencap -p > shot.png || true
-            adb logcat -d -s DSHWEB:* | tail -80 || true
+            adb logcat -d -s DSHWEB:* | tail -60 || true
             echo "$HEALTH" | grep -q '"ok":true'
             echo "$MODELS" | grep -q 'deepseek-chat'
             echo "E2E ASSERTIONS PASSED"
