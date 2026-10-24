@@ -28,7 +28,7 @@ android {
     signingConfigs {
         release {
             if (hasReleaseKeystore) {
-                storeFile file(ks['storeFile'])
+                storeFile rootProject.file(ks['storeFile'])
                 storePassword ks['storePassword']
                 keyAlias ks['keyAlias']
                 keyPassword ks['keyPassword']
