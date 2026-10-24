@@ -3,9 +3,6 @@ name: android
 on:
   push:
     branches: [main]
-    paths:
-      - 'android/**'
-      - '.github/workflows/android.yml'
     tags:
       - 'apk-*'
   workflow_dispatch:
