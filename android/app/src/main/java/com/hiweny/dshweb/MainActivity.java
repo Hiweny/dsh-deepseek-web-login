@@ -74,6 +74,56 @@ public class MainActivity extends Activity {
         if (Cfg.autoStart() && !EngineService.running) EngineService.start(this);
 
         askNotifications();
+        handleIntent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        handleIntent(intent);
+    }
+
+    /** 支持 `am start ... --es token <网页版 token>` 直接导入登录态。 */
+    private void handleIntent(Intent it) {
+        if (it == null) return;
+        String token = it.getStringExtra("token");
+        if (token != null && token.trim().length() > 8) {
+            importToken(token.trim());
+            refreshUi();
+        }
+    }
+
+    public void importToken(String token) {
+        Auth.Rec r = new Auth.Rec();
+        r.token = token;
+        r.deviceId = deviceId();
+        r.userAgent = Engine.userAgent;
+        r.cookie = Net.cookie();
+        r.capturedAt = System.currentTimeMillis();
+        Auth.upsert(r, "手动导入");
+        Auth.Rec acc = Auth.active();
+        if (acc != null) {
+            JSONObject a = new JSONObject();
+            try {
+                a.put("token", acc.token);
+                a.put("deviceId", acc.deviceId);
+                a.put("omitCookie", true);
+            } catch (Exception ignored) {
+            }
+            JSONObject u = Engine.call("usersCurrent", a, 20000);
+            if (u.optInt("status", 0) == 200) Auth.markVerified(acc);
+            else Auth.markVerifyError(acc, "HTTP " + u.optInt("status", 0));
+        }
+        App.Lg.i("已导入 token（长度 " + token.length() + "）");
+    }
+
+    private String deviceId() {
+        try {
+            String androidId = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
+            return "dsh-" + (androidId == null ? "dev" : androidId);
+        } catch (Exception e) {
+            return "dsh-" + Long.toHexString(System.currentTimeMillis());
+        }
     }
 
     private boolean isDark() {
@@ -287,6 +337,14 @@ public class MainActivity extends Activity {
                 new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
                         () -> EngineService.start(MainActivity.this), 700);
             });
+        }
+
+        @JavascriptInterface
+        public void importToken(String token) {
+            if (token != null && token.trim().length() > 8) {
+                MainActivity.this.importToken(token.trim());
+                runOnUiThread(MainActivity.this::refreshUi);
+            }
         }
 
         @JavascriptInterface
