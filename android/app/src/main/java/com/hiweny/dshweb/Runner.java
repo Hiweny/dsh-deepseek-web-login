@@ -170,6 +170,10 @@ public final class Runner {
 
         // 自动换号：每轮最多换 1 次
         int failovers = 0;
+        // 首次只带 Bearer token（不带 cookie）：多账号时不会出现「cookie 是 A、token 是 B」。
+        // 若被拒，再用页面自己的 cookie 重试一次（有些账号/节点只认 cookie 上下文）。
+        boolean omitCookie = true;
+        boolean triedCookie = false;
 
         while (true) {
             Gate.Release release = null;
@@ -207,7 +211,7 @@ public final class Runner {
                 JSONObject args = new JSONObject();
                 args.put("token", acc.token);
                 args.put("deviceId", acc.deviceId == null ? "" : acc.deviceId);
-                args.put("omitCookie", true);
+                args.put("omitCookie", omitCookie);
                 args.put("prompt", prompt);
                 args.put("thinking", req.thinking);
                 args.put("search", req.search);
@@ -234,6 +238,12 @@ public final class Runner {
                     Auth.markVerifyError(acc, sa.errorMsg);
                     boolean retryable = "TRANSPORT".equals(sa.errorCode) || "RATE_LIMIT".equals(sa.errorCode)
                             || "AUTH".equals(sa.errorCode) || "PROVIDER".equals(sa.errorCode);
+                    if ("AUTH".equals(sa.errorCode) && omitCookie && !triedCookie) {
+                        triedCookie = true;
+                        omitCookie = false;
+                        App.Lg.i("仅 token 被拒，改用页面 cookie 重试");
+                        continue;
+                    }
                     if ("AUTH".equals(sa.errorCode) && failovers < 1) {
                         Auth.Rec alt = Auth.nextUsable(acc.id);
                         if (alt != null) {
