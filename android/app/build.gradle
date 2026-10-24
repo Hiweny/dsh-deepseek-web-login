@@ -1,0 +1,66 @@
+plugins {
+    id 'com.android.application'
+}
+
+// 可选发布签名：工程根目录放 keystore.properties（storeFile/storePassword/keyAlias/keyPassword）。
+// CI 用 GitHub Secrets 注入；缺失时回退 debug 签名，保证 assembleRelease 一定能出包。
+def keystorePropsFile = rootProject.file('keystore.properties')
+def hasReleaseKeystore = keystorePropsFile.exists()
+Properties ks = new Properties()
+if (hasReleaseKeystore) {
+    ks.load(new FileInputStream(keystorePropsFile))
+}
+
+android {
+    namespace 'com.hiweny.dshweb'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.hiweny.dshweb'
+        minSdk 26
+        targetSdk 34
+        versionCode (System.getenv('VERSION_CODE') ?: '1') as int
+        versionName (System.getenv('VERSION_NAME') ?: '1.0.0')
+        vectorDrawables.useSupportLibrary = false
+        resourceConfigurations += ['zh', 'en']
+    }
+
+    signingConfigs {
+        release {
+            if (hasReleaseKeystore) {
+                storeFile file(ks['storeFile'])
+                storePassword ks['storePassword']
+                keyAlias ks['keyAlias']
+                keyPassword ks['keyPassword']
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            shrinkResources false
+            signingConfig hasReleaseKeystore ? signingConfigs.release : signingConfigs.debug
+        }
+        debug {
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packagingOptions {
+        resources.excludes += ['META-INF/*']
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+dependencies {
+}
