@@ -70,7 +70,11 @@
       var k = 'dsh_device_id';
       var v = localStorage.getItem(k);
       if (!v) {
-        v = 'dsh-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12);
+        var hex = '';
+        for (var i = 0; i < 8; i++) {
+          hex += ('00000000' + Math.floor(Math.random() * 0xffffffff).toString(16)).slice(-8);
+        }
+        v = hex.slice(0, 32);
         localStorage.setItem(k, v);
       }
       return v;
@@ -133,10 +137,12 @@
       'x-client-platform': 'web',
       'x-client-version': CLIENT_VERSION,
       'x-device-id': device || deviceId(),
-      'x-hif-leim': readHifLeim(),
       origin: BASE,
       referer: BASE + '/'
     };
+    // 只在页面里真的有这个缓存值时才带（空字符串头本身就是异常特征）
+    var hif = readHifLeim();
+    if (hif) h['x-hif-leim'] = hif;
     var t = token || readUserToken();
     if (t) h.authorization = 'Bearer ' + t;
     return h;
