@@ -1,0 +1,29 @@
+name: protocol-probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: install playwright
+        run: |
+          npm i --no-save playwright@latest
+          npx playwright install --with-deps chromium
+      - name: run probe
+        env:
+          DS_USER: ${{ secrets.DS_TEST_USER }}
+          DS_PASS: ${{ secrets.DS_TEST_PASS }}
+        run: node dev/probe.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe-out
+          path: probe-out
+          if-no-files-found: warn
