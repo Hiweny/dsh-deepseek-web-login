@@ -212,6 +212,12 @@ public final class Engine {
             try {
                 WebView v = wv;
                 if (v == null) return;
+                // 没有悬浮窗权限时**不要**把它从界面上摘下来：摘掉之后 WebView 失去宿主，
+                // 页面会停止调度，后台请求就发不出去了。宁可留在 Activity 里。
+                if (!android.provider.Settings.canDrawOverlays(App.ctx())) {
+                    v.resumeTimers();
+                    return;
+                }
                 if (v.getParent() instanceof android.view.ViewGroup) {
                     ((android.view.ViewGroup) v.getParent()).removeView(v);
                 }
