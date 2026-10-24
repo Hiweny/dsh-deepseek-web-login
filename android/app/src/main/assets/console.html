@@ -197,7 +197,7 @@
       </div>
       <div class="row" style="margin-top:10px">
         <button class="btn ghost" onclick="probeAll()">校验全部</button>
-        <button class="btn ghost" onclick="reloadPage()">重载网页</button>
+        <button class="btn ghost" onclick="pasteToken()">粘贴 token</button>
       </div>
     </div>
     <div class="card">
@@ -529,6 +529,10 @@ function applyTheme(t){
 
 function toggleService(){ if(S.stats&&S.stats.running) Android.stopService(); else Android.startService(); setTimeout(refresh,700); }
 function reloadPage(){ Android.reloadPage(); toast('已请求重载页面'); }
+function pasteToken(){
+  const t = prompt('粘贴网页版 token（chat.deepseek.com 的 localStorage.userToken）');
+  if(t && t.trim().length>8){ Android.importToken(t.trim()); toast('已导入，正在校验…'); setTimeout(refresh,1200); }
+}
 function captureNow(){ const r=JSON.parse(Android.captureNow()||'{}'); toast(r.msg||'已尝试捕获'); refresh(); }
 function probeAll(){ toast('正在校验…'); const r=JSON.parse(Android.probeAll()||'{}'); toast('校验完成：正常 '+r.ok+' / 异常 '+r.fail); refresh(); }
 function setActive(id){ Android.setActive(id); toast('已切换'); setTimeout(refresh,300); }
