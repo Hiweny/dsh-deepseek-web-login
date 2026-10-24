@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DSH Web API</string>
+    <string name="channel_service">API 服务</string>
+    <string name="channel_status">调用状态</string>
+</resources>
