@@ -95,6 +95,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: apk
+          path: ./apk
 
       - name: Enable KVM
         run: |
@@ -113,7 +114,8 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: |
             set -x
-            APK=$(find . -name "*.apk" | head -1)
+            ls -laR ./apk || true
+            APK=$(find ./apk -name "*.apk" | head -1)
             echo "APK=$APK"
             adb install -r "$APK"
             adb shell pm grant com.hiweny.dshweb android.permission.POST_NOTIFICATIONS || true
@@ -150,6 +152,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: apk
+          path: ./apk
       - uses: softprops/action-gh-release@v2
         with:
           name: DSH Web API ${{ github.ref_name }}
