@@ -521,6 +521,10 @@ public class MainActivity extends Activity {
     }
 
     private void refreshUi() {
+        try {
+            if (console != null) console.setBackgroundColor(isDark() ? 0xFF0B0E14 : 0xFFF5F6FA);
+        } catch (Exception ignored) {
+        }
         if (console != null) console.evaluateJavascript("window.__refresh && window.__refresh()", null);
     }
 }
