@@ -116,6 +116,7 @@ public final class Engine {
                 s.setJavaScriptCanOpenWindowsAutomatically(false);
                 s.setSupportMultipleWindows(false);
                 s.setUserAgentString(s.getUserAgentString().replace("; wv", ""));
+                applyDarkMode(ctx, s);
                 userAgent = s.getUserAgentString();
                 CookieManager.getInstance().setAcceptCookie(true);
                 CookieManager.getInstance().setAcceptThirdPartyCookies(v, true);
@@ -183,6 +184,35 @@ public final class Engine {
             } catch (Throwable e) {
                 App.Lg.e("WebView 创建失败: " + e);
                 lastPageError = String.valueOf(e.getMessage());
+            }
+        });
+    }
+
+    /** 网页版跟随系统深浅色：WebView 的 prefers-color-scheme 由这里决定。 */
+    private static void applyDarkMode(Context ctx, WebSettings s) {
+        try {
+            boolean dark = (ctx.getResources().getConfiguration().uiMode
+                    & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+                    == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                s.setAlgorithmicDarkeningAllowed(dark);
+            } else if (android.os.Build.VERSION.SDK_INT >= 29) {
+                s.setForceDark(dark ? WebSettings.FORCE_DARK_ON : WebSettings.FORCE_DARK_OFF);
+            }
+            App.Lg.i("WebView 主题: " + (dark ? "dark" : "light"));
+        } catch (Throwable e) {
+            App.Lg.w("applyDarkMode: " + e);
+        }
+    }
+
+    /** 系统深浅色变化时调用（重建 WebView 太贵，用 force dark + 重载一次足够）。 */
+    public static void onSystemThemeChanged() {
+        MAIN.post(() -> {
+            try {
+                if (wv == null) return;
+                applyDarkMode(App.ctx(), wv.getSettings());
+                wv.reload();
+            } catch (Throwable ignored) {
             }
         });
     }
