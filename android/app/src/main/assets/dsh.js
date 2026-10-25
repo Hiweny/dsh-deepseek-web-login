@@ -230,7 +230,11 @@
     var code = dv.getInt32(sp, true);
     var answer = Math.floor(dv.getFloat64(sp + 8, true));
     e.__wbindgen_add_to_stack_pointer(16);
-    if (code !== 0 || !isFinite(answer) || answer <= 0) throw new Error('PoW solve code=' + code);
+    // ⚠️ 上游判据：**code === 0 才是失败**（成功时 wasm 返回 1）。
+    // 之前写成 code !== 0 抛错，导致每次求解都被自己判成失败（PoW solve code=1）。
+    if (code === 0 || !isFinite(answer) || answer <= 0) {
+      throw new Error('PoW solve failed (code=' + code + ', answer=' + answer + ')');
+    }
     return answer;
   }
 
@@ -269,6 +273,7 @@
     var ch = json && json.data && json.data.biz_data && json.data.biz_data.challenge;
     if (!ch || !ch.challenge || !ch.salt || !ch.signature) throw new Error('challenge 字段缺失（登录态可能过期）');
     var answer = await solvePow(ch);
+    try { window.__LAST_POW = { answer: answer, difficulty: ch.difficulty, challenge: String(ch.challenge).slice(0, 12) }; } catch (e) {}
     return b64(JSON.stringify({
       algorithm: ch.algorithm,
       challenge: ch.challenge,
@@ -538,7 +543,7 @@
           }
           if (method === 'pow') {
             var ph = await powHeader(args.token || '', args.targetPath || '/api/v0/chat/completion', args.deviceId || '');
-            emit(id, { t: 'pow', ok: true, header: ph });
+            emit(id, { t: 'pow', ok: true, header: ph, last: (window.__LAST_POW || {}) });
             return;
           }
           if (method === 'sessionCreate') {
