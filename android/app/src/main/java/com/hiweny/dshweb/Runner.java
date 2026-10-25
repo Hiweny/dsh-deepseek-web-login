@@ -235,6 +235,7 @@ public final class Runner {
                 args.put("thinking", req.thinking);
                 args.put("search", req.search);
                 args.put("modelType", "default");
+                args.put("authHeaders", acc.extraHeaders == null ? new JSONObject() : acc.extraHeaders);
                 args.put("parentMessageId", parent == null ? JSONObject.NULL : parent);
                 if (sessionId != null) args.put("sessionId", sessionId);
                 args.put("deleteAfter", "immediate".equals(Cfg.sessionCleanup()));
@@ -278,7 +279,13 @@ public final class Runner {
                 final StreamAcc sa = new StreamAcc(sink, req);
                 Engine.stream(rid, "completion", args, (type, ev) -> sa.onEvent(type, ev));
 
+                long deadline = System.currentTimeMillis() + 12 * 60_000L;
                 while (!sa.done && !req.cancelled) {
+                    if (System.currentTimeMillis() > deadline) {
+                        Engine.cancel(rid);
+                        App.Lg.w("单轮超过 12 分钟，已中止（watchdog）");
+                        break;
+                    }
                     Thread.sleep(120);
                 }
                 if (req.cancelled) {
@@ -289,6 +296,11 @@ public final class Runner {
 
                 if (sa.errorCode != null) {
                     lastErr = sa.errorMsg;
+                    if (!sa.sessionId.isEmpty()) {
+                        // 请求失败但会话已经建出来了 → 交给清理队列，别在网页端留下来
+                        CLEANUP.add(sa.sessionId);
+                        if (cleanupFirstAt == 0) cleanupFirstAt = System.currentTimeMillis();
+                    }
                     Auth.markVerifyError(acc, sa.errorMsg);
                     boolean retryable = "TRANSPORT".equals(sa.errorCode) || "RATE_LIMIT".equals(sa.errorCode)
                             || "AUTH".equals(sa.errorCode) || "PROVIDER".equals(sa.errorCode);
@@ -359,7 +371,8 @@ public final class Runner {
                 }
 
                 boolean mid = Protocol.looksMidSentence(sa.textOut.toString());
-                boolean cut = sa.finishReason == null || sa.finishReason.isEmpty();
+                // 上游 cutByServer = finishReason === undefined（没收到终态）
+                boolean cut = sa.finishReason == null || sa.finishReason.isEmpty() || "unknown".equals(sa.finishReason);
                 if (rounds < maxRounds && (mid || cut) && sa.textOut.length() > 0) {
                     rounds++;
                     App.Lg.i("回答中断（mid=" + mid + " cut=" + cut + "），自动续写第 " + rounds + " 轮");
@@ -462,8 +475,10 @@ public final class Runner {
                     sessionId = ev.optString("sid", sessionId);
                     messageId = String.valueOf(ev.opt("mid"));
                     if ("0".equals(messageId) || "null".equals(messageId)) messageId = "";
-                    finishReason = ev.optString("status", "stop");
-                    if ("FINISHED".equals(finishReason)) finishReason = "stop";
+                    String st = ev.optString("status", "");
+                    if ("FINISHED".equals(st)) finishReason = "stop";
+                    else if (st.isEmpty()) finishReason = "unknown";
+                    else finishReason = st;
                     close();
                 }
             } catch (Exception e) {
