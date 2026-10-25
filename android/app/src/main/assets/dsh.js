@@ -467,6 +467,8 @@
       preempt: false
     };
     var h = headers(token, device, 'text/event-stream', args.authHeaders);
+    // 上游的 referer 是具体会话页，不是根路径（更像真人点了某条会话在说话）
+    try { h.referer = BASE + '/a/chat/s/' + sid; } catch (e) {}
     h['x-ds-pow-response'] = pow;
     var opt = omit ? { credentials: 'omit' } : {};
     var r = await fetch(BASE + '/api/v0/chat/completion', {
