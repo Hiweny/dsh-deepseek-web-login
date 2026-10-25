@@ -87,6 +87,7 @@ public class EngineService extends Service {
         Cfg.init(this);
         Auth.init(this);
         Usage.init(this);
+        Runner.loadSlots();
         createChannel();
         startForeground(NOTIF_ID, buildNotification());
 
