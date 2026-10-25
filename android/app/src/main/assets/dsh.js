@@ -49,6 +49,26 @@
   // 页面自己发的每个请求都带 Authorization: Bearer <token>，这是最可靠的来源：
   // 不依赖 localStorage 的键名/结构（上游也吃过 "userToken 是 JSON 串" 的亏）。
   var seenToken = '';
+  var CAP = {};
+  try { CAP = JSON.parse(localStorage.getItem('dsh_cap_headers') || '{}'); } catch (e) { CAP = {}; }
+  var CAP_KEYS = ['x-client-version', 'x-hif-dliq', 'x-hif-leim', 'x-device-id', 'x-client-platform'];
+  function rememberHeaders(getter) {
+    try {
+      var changed = false;
+      for (var i = 0; i < CAP_KEYS.length; i++) {
+        var k = CAP_KEYS[i];
+        var v = getter(k);
+        if (v && String(v).length > 0 && CAP[k] !== v) {
+          CAP[k] = String(v);
+          changed = true;
+        }
+      }
+      if (changed) {
+        try { localStorage.setItem('dsh_cap_headers', JSON.stringify(CAP)); } catch (e) {}
+        try { DSHBridge.log('[DSH] 已捕获请求头 ' + JSON.stringify(CAP).slice(0, 200)); } catch (e) {}
+      }
+    } catch (e) {}
+  }
   function rememberAuth(v) {
     try {
       if (!v) return;
@@ -66,14 +86,22 @@
       var wrapped = function (input, init) {
         try {
           var h = (init && init.headers) || (input && input.headers);
+          var url = '';
+          try { url = typeof input === 'string' ? input : (input && input.url) || ''; } catch (e) {}
           if (h) {
-            if (typeof Headers !== 'undefined' && h instanceof Headers) {
-              rememberAuth(h.get('authorization'));
-            } else if (Array.isArray(h)) {
-              for (var i = 0; i < h.length; i++) if (String(h[i][0]).toLowerCase() === 'authorization') rememberAuth(h[i][1]);
-            } else if (typeof h === 'object') {
-              for (var k in h) if (String(k).toLowerCase() === 'authorization') rememberAuth(h[k]);
-            }
+            var getter = function (name) {
+              try {
+                if (typeof Headers !== 'undefined' && h instanceof Headers) return h.get(name);
+                if (Array.isArray(h)) {
+                  for (var i = 0; i < h.length; i++) if (String(h[i][0]).toLowerCase() === name) return h[i][1];
+                  return '';
+                }
+                for (var k in h) if (String(k).toLowerCase() === name) return h[k];
+              } catch (e) {}
+              return '';
+            };
+            rememberAuth(getter('authorization'));
+            if (url.indexOf('/api/') >= 0) rememberHeaders(getter);
           }
         } catch (e) {}
         return _fetch.apply(this, arguments);
@@ -90,7 +118,14 @@
       return _open.apply(this, arguments);
     };
     XMLHttpRequest.prototype.setRequestHeader = function (k, v) {
-      try { if (String(k).toLowerCase() === 'authorization') rememberAuth(v); } catch (e) {}
+      try {
+        var key = String(k).toLowerCase();
+        if (key === 'authorization') rememberAuth(v);
+        if (CAP_KEYS.indexOf(key) >= 0 && v) {
+          CAP[key] = String(v);
+          try { localStorage.setItem('dsh_cap_headers', JSON.stringify(CAP)); } catch (e) {}
+        }
+      } catch (e) {}
       return _set.apply(this, arguments);
     };
   } catch (e) {}
@@ -129,7 +164,7 @@
   }
 
   // 图片上传：/api/v0/file/upload_file（multipart + PoW），返回 file_id
-  async function uploadImage(token, device, dataUrl, name) {
+  async function uploadImage(token, device, dataUrl, name, extra) {
     var comma = dataUrl.indexOf(',');
     if (comma < 0) throw new Error('图片不是 data URL');
     var meta = dataUrl.slice(5, comma);
@@ -140,8 +175,8 @@
     var blob = new Blob([arr], { type: mime });
     var fd = new FormData();
     fd.append('file', blob, name || ('image.' + (mime.split('/')[1] || 'png')));
-    var pow = await powHeader(token, '/api/v0/file/upload_file', device);
-    var h = headers(token, device);
+    var pow = await powHeader(token, '/api/v0/file/upload_file', device, extra);
+    var h = headers(token, device, null, extra);
     delete h['content-type'];
     h['x-ds-pow-response'] = pow;
     var r = await fetch(BASE + '/api/v0/file/upload_file', { method: 'POST', headers: h, body: fd });
@@ -238,17 +273,29 @@
     return answer;
   }
 
-  function headers(token, device, accept) {
+  function headers(token, device, accept, extra) {
     var h = {
       accept: accept || 'application/json, text/plain, */*',
       'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
       'content-type': 'application/json',
-      'x-client-platform': 'web',
-      'x-client-version': CLIENT_VERSION,
-      'x-device-id': device || deviceId(),
+      'x-client-platform': CAP['x-client-platform'] || 'web',
+      'x-client-version': CAP['x-client-version'] || CLIENT_VERSION,
+      'x-device-id': CAP['x-device-id'] || device || deviceId(),
       origin: BASE,
       referer: BASE + '/'
     };
+    if (CAP['x-hif-dliq']) h['x-hif-dliq'] = CAP['x-hif-dliq'];
+    // 账号自己捕获到的真实头优先（多账号时每个号的头可能不同）
+    if (extra && typeof extra === 'object') {
+      for (var ek in extra) {
+        if (!ek) continue;
+        var ev = extra[ek];
+        if (ev === undefined || ev === null || ev === '') continue;
+        var low = String(ek).toLowerCase();
+        if (low === 'authorization' || low === 'content-type' || low === 'origin' || low === 'referer') continue;
+        h[low] = String(ev);
+      }
+    }
     // 只在页面里真的有这个缓存值时才带（空字符串头本身就是异常特征）
     var hif = readHifLeim();
     if (hif) h['x-hif-leim'] = hif;
@@ -257,10 +304,10 @@
     return h;
   }
 
-  async function powHeader(token, targetPath, device) {
+  async function powHeader(token, targetPath, device, extra) {
     var r = await fetch(BASE + '/api/v0/chat/create_pow_challenge', {
       method: 'POST',
-      headers: headers(token, device),
+      headers: headers(token, device, null, extra),
       body: JSON.stringify({ target_path: targetPath })
     });
     var text = await r.text();
@@ -371,11 +418,11 @@
   }
 
   // ── 请求主体 ──────────────────────────────────────────────
-  async function createSession(token, device, omit) {
+  async function createSession(token, device, omit, extra) {
     var opt = omit ? { credentials: 'omit' } : {};
     var r = await fetch(BASE + '/api/v0/chat_session/create', {
       method: 'POST',
-      headers: headers(token, device),
+      headers: headers(token, device, null, extra),
       body: '{}',
       ...opt
     });
@@ -389,11 +436,11 @@
     return sid;
   }
 
-  async function deleteSession(token, device, sid, omit) {
+  async function deleteSession(token, device, sid, omit, extra) {
     var opt = omit ? { credentials: 'omit' } : {};
     var r = await fetch(BASE + '/api/v0/chat_session/delete', {
       method: 'POST',
-      headers: headers(token, device),
+      headers: headers(token, device, null, extra),
       body: JSON.stringify({ chat_session_id: sid }),
       ...opt
     });
@@ -407,7 +454,7 @@
     var sid = args.sessionId || '';
     if (!sid) sid = await createSession(token, device, omit);
 
-    var pow = await powHeader(token, '/api/v0/chat/completion', device);
+    var pow = await powHeader(token, '/api/v0/chat/completion', device, args.authHeaders);
     var body = {
       chat_session_id: sid,
       parent_message_id: args.parentMessageId === undefined ? null : args.parentMessageId,
@@ -419,7 +466,7 @@
       action: null,
       preempt: false
     };
-    var h = headers(token, device, 'text/event-stream');
+    var h = headers(token, device, 'text/event-stream', args.authHeaders);
     h['x-ds-pow-response'] = pow;
     var opt = omit ? { credentials: 'omit' } : {};
     var r = await fetch(BASE + '/api/v0/chat/completion', {
@@ -507,7 +554,7 @@
       thinkLen: lastThink.length
     });
     if (args.deleteAfter) {
-      try { await deleteSession(token, device, sid, omit); } catch (e) {}
+      try { await deleteSession(token, device, sid, omit, args.authHeaders); } catch (e) {}
     }
   }
 
@@ -525,7 +572,7 @@
             return;
           }
           if (method === 'uploadFile') {
-            var upId = await uploadImage(args.token || readUserToken(), args.deviceId || '', args.dataUrl, args.name);
+            var upId = await uploadImage(args.token || readUserToken(), args.deviceId || '', args.dataUrl, args.name, args.authHeaders);
             emit(id, { t: 'ok', id: upId });
             return;
           }
@@ -537,6 +584,7 @@
               hifLeim: readHifLeim(),
               deviceId: deviceId(),
               userAgent: navigator.userAgent,
+              headers: CAP,
               url: location.href
             });
             return;
@@ -547,18 +595,18 @@
             return;
           }
           if (method === 'sessionCreate') {
-            var s1 = await createSession(args.token || '', args.deviceId || '', !!args.omitCookie);
+            var s1 = await createSession(args.token || '', args.deviceId || '', !!args.omitCookie, args.authHeaders);
             emit(id, { t: 'session', id: s1 });
             return;
           }
           if (method === 'sessionDelete') {
-            var okd = await deleteSession(args.token || '', args.deviceId || '', args.sessionId, !!args.omitCookie);
+            var okd = await deleteSession(args.token || '', args.deviceId || '', args.sessionId, !!args.omitCookie, args.authHeaders);
             emit(id, { t: 'ok', deleted: okd });
             return;
           }
           if (method === 'models') {
             var rm = await fetch(BASE + '/api/v0/client/settings?scope=model', {
-              headers: headers(args.token || '', args.deviceId || ''),
+              headers: headers(args.token || '', args.deviceId || '', null, args.authHeaders),
               credentials: args.omitCookie ? 'omit' : 'same-origin'
             });
             emit(id, { t: 'ok', status: rm.status, body: (await rm.text()).slice(0, 30000) });
@@ -566,7 +614,7 @@
           }
           if (method === 'usersCurrent') {
             var r2 = await fetch(BASE + '/api/v0/users/current', {
-              headers: headers(args.token || '', args.deviceId || ''),
+              headers: headers(args.token || '', args.deviceId || '', null, args.authHeaders),
               credentials: args.omitCookie ? 'omit' : 'same-origin'
             });
             var bt = await r2.text();
