@@ -49,8 +49,18 @@ public final class Engine {
     public static final String SITE = "https://chat.deepseek.com/";
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    /** 业务回调线程（流事件、一次性回调都在这里跑，保证顺序）。 */
     private static final ExecutorService DISPATCH = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "js-dispatch");
+        t.setDaemon(true);
+        return t;
+    });
+    /**
+     * 主动调用的线程池。⚠️ 必须与 DISPATCH 分开：
+     * callAsync 会阻塞等回调，而回调是投递给 DISPATCH 的 —— 两者共用一个线程就自己把自己锁死。
+     */
+    private static final ExecutorService CALLS = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "js-call");
         t.setDaemon(true);
         return t;
     });
@@ -301,7 +311,7 @@ public final class Engine {
     // ── 调用通道 ─────────────────────────────────────────────
     /** 异步调用：内部起线程等待，回调在后台线程，调用方自己 post 到主线程。 */
     public static void callAsync(final String method, final JSONObject args, final long timeoutMs, final Cb cb) {
-        DISPATCH.execute(() -> {
+        CALLS.execute(() -> {
             JSONObject r;
             try {
                 r = call(method, args, timeoutMs);
@@ -411,7 +421,7 @@ public final class Engine {
         if ("auto".equals(reqId)) {
             final String token = ev.optString("token");
             if (token != null && token.length() > 16) {
-                DISPATCH.execute(() -> autoCapture(token, ev));
+                CALLS.execute(() -> autoCapture(token, ev));
             }
             return;
         }
