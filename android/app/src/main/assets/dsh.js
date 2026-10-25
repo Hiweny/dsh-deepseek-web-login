@@ -44,18 +44,115 @@
   }
 
   // ── 登录态 / 指纹 ─────────────────────────────────────────
+
+  // ── 登录态采集（document-start 就装）──────────────────────
+  // 页面自己发的每个请求都带 Authorization: Bearer <token>，这是最可靠的来源：
+  // 不依赖 localStorage 的键名/结构（上游也吃过 "userToken 是 JSON 串" 的亏）。
+  var seenToken = '';
+  function rememberAuth(v) {
+    try {
+      if (!v) return;
+      var s = String(v);
+      if (/^Bearer\s+/i.test(s)) s = s.replace(/^Bearer\s+/i, '');
+      if (s.length > 16 && s.indexOf(' ') < 0) {
+        seenToken = s;
+        try { localStorage.setItem('dsh_seen_token', s); } catch (e) {}
+      }
+    } catch (e) {}
+  }
+  try {
+    var _fetch = window.fetch;
+    if (_fetch && !_fetch.__dshHooked) {
+      var wrapped = function (input, init) {
+        try {
+          var h = (init && init.headers) || (input && input.headers);
+          if (h) {
+            if (typeof Headers !== 'undefined' && h instanceof Headers) {
+              rememberAuth(h.get('authorization'));
+            } else if (Array.isArray(h)) {
+              for (var i = 0; i < h.length; i++) if (String(h[i][0]).toLowerCase() === 'authorization') rememberAuth(h[i][1]);
+            } else if (typeof h === 'object') {
+              for (var k in h) if (String(k).toLowerCase() === 'authorization') rememberAuth(h[k]);
+            }
+          }
+        } catch (e) {}
+        return _fetch.apply(this, arguments);
+      };
+      wrapped.__dshHooked = true;
+      window.fetch = wrapped;
+    }
+  } catch (e) {}
+  try {
+    var _open = XMLHttpRequest.prototype.open;
+    var _set = XMLHttpRequest.prototype.setRequestHeader;
+    XMLHttpRequest.prototype.open = function () {
+      this.__dshUrl = arguments[1];
+      return _open.apply(this, arguments);
+    };
+    XMLHttpRequest.prototype.setRequestHeader = function (k, v) {
+      try { if (String(k).toLowerCase() === 'authorization') rememberAuth(v); } catch (e) {}
+      return _set.apply(this, arguments);
+    };
+  } catch (e) {}
+
   function readUserToken() {
     try {
       var raw = localStorage.getItem('userToken') || '';
-      if (!raw) return '';
-      if (raw.trim().charAt(0) === '{') {
-        var o = JSON.parse(raw);
-        return o.value || o.token || '';
+      if (raw) {
+        if (raw.trim().charAt(0) === '{') {
+          var o = JSON.parse(raw);
+          var v = o.value || o.token || o.access_token || '';
+          if (v) return v;
+        } else {
+          return raw.trim();
+        }
       }
-      return raw.trim();
-    } catch (e) {
-      return '';
+    } catch (e) {}
+    for (var i = 0; i < 6; i++) {
+      try {
+        var k = ['token', 'access_token', 'Authorization', 'auth_token', 'dsh_seen_token', 'ds_token'][i];
+        var v2 = localStorage.getItem(k);
+        if (v2 && v2.length > 16) {
+          if (v2.trim().charAt(0) === '{') {
+            try { v2 = JSON.parse(v2).value || JSON.parse(v2).token || ''; } catch (e2) {}
+          }
+          if (v2 && v2.length > 16) return v2.trim();
+        }
+      } catch (e3) {}
     }
+    if (seenToken) return seenToken;
+    try {
+      var hs = performance.getEntriesByType('resource');
+      for (var j = 0; j < hs.length; j++) {}
+    } catch (e4) {}
+    return '';
+  }
+
+  // 图片上传：/api/v0/file/upload_file（multipart + PoW），返回 file_id
+  async function uploadImage(token, device, dataUrl, name) {
+    var comma = dataUrl.indexOf(',');
+    if (comma < 0) throw new Error('图片不是 data URL');
+    var meta = dataUrl.slice(5, comma);
+    var mime = (meta.split(';')[0] || 'image/png').trim();
+    var bin = atob(dataUrl.slice(comma + 1));
+    var arr = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    var blob = new Blob([arr], { type: mime });
+    var fd = new FormData();
+    fd.append('file', blob, name || ('image.' + (mime.split('/')[1] || 'png')));
+    var pow = await powHeader(token, '/api/v0/file/upload_file', device);
+    var h = headers(token, device);
+    delete h['content-type'];
+    h['x-ds-pow-response'] = pow;
+    var r = await fetch(BASE + '/api/v0/file/upload_file', { method: 'POST', headers: h, body: fd });
+    var txt = await r.text();
+    var json = null;
+    try { json = JSON.parse(txt); } catch (e) {}
+    if (!r.ok) throw new Error('upload HTTP ' + r.status + ': ' + txt.slice(0, 160));
+    var biz = json && json.data && json.data.biz_data;
+    var id = biz && (biz.id || biz.file_id || (biz.file && biz.file.id));
+    if (!id) throw new Error('upload 缺少 id: ' + txt.slice(0, 160));
+    return id;
   }
   function readHifLeim() {
     try {
@@ -412,6 +509,11 @@
         try {
           if (method === 'ping') {
             emit(id, { t: 'pong', url: location.href, token: readUserToken().length, ready: true });
+            return;
+          }
+          if (method === 'uploadFile') {
+            var upId = await uploadImage(args.token || readUserToken(), args.deviceId || '', args.dataUrl, args.name);
+            emit(id, { t: 'ok', id: upId });
             return;
           }
           if (method === 'capture') {
