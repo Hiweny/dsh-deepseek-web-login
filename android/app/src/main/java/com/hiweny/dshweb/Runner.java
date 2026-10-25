@@ -67,6 +67,14 @@ public final class Runner {
                 }
             });
 
+    /** dataUrl hash → 网页端 file_id（同一张图不重复上传）。 */
+    private static final Map<String, String> UPLOADS = new java.util.LinkedHashMap<String, String>(16, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, String> eldest) {
+            return size() > 40;
+        }
+    };
+
     private static final List<String> CLEANUP = Collections.synchronizedList(new ArrayList<>());
     private static volatile long cleanupFirstAt = 0;
 
@@ -219,6 +227,41 @@ public final class Runner {
                 args.put("parentMessageId", parent == null ? JSONObject.NULL : parent);
                 if (sessionId != null) args.put("sessionId", sessionId);
                 args.put("deleteAfter", "immediate".equals(Cfg.sessionCleanup()));
+
+                // 图片输入：先上传成 file_id，再用 ref_file_ids 引用（网页端看图就是这么走的）
+                JSONArray refIds = new JSONArray();
+                if (!parts.images.isEmpty()) {
+                    int max = Cfg.maxRefImages();
+                    int from = max <= 0 ? 0 : Math.max(0, parts.images.size() - max);
+                    for (int i = from; i < parts.images.size(); i++) {
+                        Protocol.Image img = parts.images.get(i);
+                        String key = Integer.toHexString(img.dataUrl.hashCode()) + "-" + img.dataUrl.length();
+                        String fid;
+                        synchronized (UPLOADS) {
+                            fid = UPLOADS.get(key);
+                        }
+                        if (fid == null) {
+                            JSONObject up = new JSONObject();
+                            up.put("token", acc.token);
+                            up.put("deviceId", acc.deviceId == null ? "" : acc.deviceId);
+                            up.put("omitCookie", omitCookie);
+                            up.put("dataUrl", img.dataUrl);
+                            up.put("name", img.name);
+                            JSONObject ur = Engine.call("uploadFile", up, 90000);
+                            fid = ur.optString("id", "");
+                            if (fid.isEmpty()) {
+                                App.Lg.w("图片上传失败: " + ur.optString("msg"));
+                                continue;
+                            }
+                            synchronized (UPLOADS) {
+                                UPLOADS.put(key, fid);
+                            }
+                        }
+                        refIds.put(fid);
+                    }
+                    App.Lg.i("本轮图片 " + refIds.length() + " 张");
+                }
+                args.put("refFileIds", refIds);
 
                 final String rid = "s" + Long.toHexString(System.nanoTime());
                 final StreamAcc sa = new StreamAcc(sink, req);
