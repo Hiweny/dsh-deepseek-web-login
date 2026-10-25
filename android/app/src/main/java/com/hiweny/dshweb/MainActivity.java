@@ -560,6 +560,56 @@ public class MainActivity extends Activity {
         }
 
         /** 诊断：页面/鉴权/PoW/建会话 四项，零额度（不消耗生成）。 */
+        /** 读服务端的模型档位（GET /api/v0/client/settings?scope=model，零额度）。 */
+        @JavascriptInterface
+        public void modelsProbe() {
+            Auth.Rec acc = Auth.active();
+            if (acc == null) {
+                push("models", "{\"error\":\"没有可用账号\"}");
+                return;
+            }
+            JSONObject a = new JSONObject();
+            try {
+                a.put("token", acc.token);
+                a.put("deviceId", acc.deviceId == null ? "" : acc.deviceId);
+                a.put("omitCookie", true);
+            } catch (Exception ignored) {
+            }
+            Engine.callAsync("models", a, 20000, r -> {
+                int status = r.optInt("status", 0);
+                String body = r.optString("body", "");
+                if (status != 200) {
+                    push("models", "{\"error\":\"HTTP " + status + "\"}");
+                    return;
+                }
+                JSONObject j = Json.parseObjOrNull(body);
+                StringBuilder sb = new StringBuilder();
+                try {
+                    JSONObject data = j == null ? null : j.optJSONObject("data");
+                    JSONObject biz = data == null ? null : data.optJSONObject("biz_data");
+                    JSONArray list = biz == null ? null : biz.optJSONArray("model_configs");
+                    if (list != null) {
+                        for (int i = 0; i < list.length(); i++) {
+                            JSONObject m = list.optJSONObject(i);
+                            if (m == null) continue;
+                            sb.append(m.optString("model_type", "?")).append("  ")
+                              .append(m.optString("name", "")).append("  enabled=")
+                              .append(m.optBoolean("enabled")).append(" switchable=")
+                              .append(m.optBoolean("switchable")).append("\n");
+                        }
+                    }
+                    JSONObject file = biz == null ? null : biz.optJSONObject("file_feature");
+                    if (file != null) sb.append("附件 token 预算 ").append(file.optLong("token_limit")).append("\n");
+                    long limit = biz == null ? 0 : biz.optLong("input_character_limit", 0);
+                    if (limit > 0) sb.append("单请求输入字符上限 ").append(limit).append("\n");
+                    if (sb.length() == 0) sb.append(Json.truncate(body, 1200));
+                } catch (Exception e) {
+                    sb.append(Json.truncate(body, 1200));
+                }
+                push("models", "{\"text\":" + JSONObject.quote(sb.toString()) + "}");
+            });
+        }
+
         @JavascriptInterface
         public void diagnose() {
             new Thread(() -> {
