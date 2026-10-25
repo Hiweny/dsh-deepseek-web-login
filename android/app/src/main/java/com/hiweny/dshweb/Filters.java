@@ -101,7 +101,8 @@ public final class Filters {
                 fence = 1;
             }
             int[] cands = new int[]{s.indexOf("{\"tool_calls\""), s.indexOf("{\"tool_call\""),
-                    s.indexOf("<tool_calls"), s.indexOf("<invoke"), s.indexOf("<parameter")};
+                    s.indexOf("<tool_calls"), s.indexOf("<invoke"), s.indexOf("<parameter"),
+                    s.indexOf("<|DSML|"), s.indexOf("<dsml-")};
             for (int c : cands) {
                 if (c >= 0 && (best < 0 || c < best)) {
                     best = c;
@@ -111,8 +112,17 @@ public final class Filters {
             return best < 0 ? null : new int[]{best, fence};
         }
 
+        /** 上游容忍的 DSML/XML 变体：`<|DSML|tool_calls>`、`<dsml-invoke>`、CDATA 包裹等。 */
+        static String normalizeDsml(String s) {
+            if (s == null) return "";
+            String t = s.replace("<|DSML|", "<").replace("|DSML|>", ">")
+                    .replace("<dsml-", "<").replace("</dsml-", "</")
+                    .replace("<![CDATA[", "").replace("]]>", "");
+            return t;
+        }
+
         private void drainCapture(Out out, boolean flush) {
-            String s = cap.toString();
+            String s = normalizeDsml(cap.toString());
             int jsonStart = -1;
             Matcher m = FENCE_OPEN.matcher(s);
             if (m.find()) {
