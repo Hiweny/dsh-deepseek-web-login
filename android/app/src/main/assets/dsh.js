@@ -551,6 +551,14 @@
             emit(id, { t: 'ok', deleted: okd });
             return;
           }
+          if (method === 'models') {
+            var rm = await fetch(BASE + '/api/v0/client/settings?scope=model', {
+              headers: headers(args.token || '', args.deviceId || ''),
+              credentials: args.omitCookie ? 'omit' : 'same-origin'
+            });
+            emit(id, { t: 'ok', status: rm.status, body: (await rm.text()).slice(0, 30000) });
+            return;
+          }
           if (method === 'usersCurrent') {
             var r2 = await fetch(BASE + '/api/v0/users/current', {
               headers: headers(args.token || '', args.deviceId || ''),
