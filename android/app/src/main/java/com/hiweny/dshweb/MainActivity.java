@@ -190,6 +190,22 @@ public class MainActivity extends Activity {
         moveTaskToBack(true);
     }
 
+    private int lastUiMode = -1;
+
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration cfg) {
+        super.onConfigurationChanged(cfg);
+        int mode = cfg.uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK;
+        if (mode != lastUiMode) {
+            lastUiMode = mode;
+            rootView.setBackgroundColor(isDark() ? 0xFF0B0E14 : 0xFFF5F6FA);
+            if (console != null) console.setBackgroundColor(isDark() ? 0xFF0B0E14 : 0xFFF5F6FA);
+            if (bottomBar != null) bottomBar.setBackgroundColor(isDark() ? 0xFF0E121B : 0xFFFFFFFF);
+            Engine.onSystemThemeChanged();
+            push("refresh", "{}");
+        }
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
@@ -633,7 +649,11 @@ public class MainActivity extends Activity {
                     JSONObject u = Engine.call("usersCurrent", a, 20000);
                     sb.append("鉴权 ").append(u.optInt("status", 0) == 200 ? "✓ users/current 200" : "✗ HTTP " + u.optInt("status", 0)).append("\n");
                     JSONObject pow = Engine.call("pow", a, 30000);
-                    sb.append("PoW ").append(pow.optBoolean("ok") ? "✓ 求解成功（" + Auth.shortId(pow.optString("header")) + "…）" : "✗ " + pow.optString("msg")).append("\n");
+                    JSONObject last = pow.optJSONObject("last");
+                    sb.append("PoW ").append(pow.optBoolean("ok")
+                            ? "✓ 求解成功 answer=" + (last == null ? "?" : String.valueOf(last.opt("answer")))
+                              + " difficulty=" + (last == null ? "?" : String.valueOf(last.opt("difficulty")))
+                            : "✗ " + pow.optString("msg")).append("\n");
                     JSONObject s = Engine.call("sessionCreate", a, 20000);
                     String sid = s.optString("id", "");
                     sb.append("会话 ").append(!sid.isEmpty() ? "✓ " + Auth.shortId(sid) : "✗ " + s.optString("msg")).append("\n");
