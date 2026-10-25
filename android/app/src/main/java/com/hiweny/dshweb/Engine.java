@@ -503,6 +503,8 @@ public final class Engine {
             r.deviceId = ev.optString("deviceId", "");
             r.userAgent = ev.optString("userAgent", userAgent);
             r.cookie = com.hiweny.dshweb.Net.cookie();
+            JSONObject hdrs = ev.optJSONObject("headers");
+            if (hdrs != null) r.extraHeaders = hdrs;
             r.capturedAt = System.currentTimeMillis();
             Auth.upsert(r, "");
             Auth.Rec acc = Auth.active();
