@@ -224,6 +224,8 @@
     <div class="card">
       <h2>可用模型</h2>
       <div id="models"></div>
+      <button class="btn ghost" style="margin-bottom:12px" onclick="Android.modelsProbe()">探测服务端档位</button>
+      <pre class="log" id="modelsBox" style="max-height:30vh">点上面的按钮读 GET /api/v0/client/settings?scope=model</pre>
       <div class="hint">网页端只有「快速模式」一档：<b>deepseek-chat</b> 与 <b>deepseek-reasoner</b> 的差别只是 thinking_enabled 开关。旧 id（pro/expert/vision）会按别名回退。</div>
     </div>
     <div class="card">
@@ -412,6 +414,11 @@ window.__ev = function (name, json) {
   if (name === 'probe') {
     if (d.done) { toast('校验完成：正常 ' + (d.ok|0) + ' / 异常 ' + (d.fail|0)); refresh(); }
     else toast('校验中 ' + (d.at|0) + '/' + (d.total|0) + ' · 正常 ' + (d.ok|0));
+    return;
+  }
+  if (name === 'models') {
+    const b = document.getElementById('modelsBox');
+    if (b) b.textContent = d.error ? ('读取失败：' + d.error) : (d.text || '');
     return;
   }
   if (name === 'diag') {
