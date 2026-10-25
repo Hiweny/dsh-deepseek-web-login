@@ -469,6 +469,56 @@ public final class Auth {
         return r != null && r.limitUntilMs > System.currentTimeMillis();
     }
 
+    // ── 分组（只影响显示，删组不删账号）────────────────────
+    public static JSONArray groupsJson() {
+        JSONArray arr = new JSONArray();
+        try {
+            File f = new File(App.ctx().getFilesDir(), "groups.json");
+            if (!f.exists()) return arr;
+            String txt = read(f);
+            JSONArray raw = new JSONArray(txt);
+            for (int i = 0; i < raw.length(); i++) {
+                JSONObject g = raw.optJSONObject(i);
+                if (g != null) arr.put(g);
+            }
+        } catch (Exception ignored) {
+        }
+        return arr;
+    }
+
+    public static synchronized void addGroup(String name) {
+        try {
+            if (name == null || name.trim().isEmpty()) return;
+            JSONArray arr = groupsJson();
+            JSONObject g = new JSONObject();
+            g.put("id", "grp_" + Long.toHexString(System.currentTimeMillis()).substring(4));
+            g.put("name", name.trim());
+            arr.put(g);
+            write(new File(App.ctx().getFilesDir(), "groups.json"), arr.toString());
+        } catch (Exception ignored) {
+        }
+    }
+
+    public static synchronized void removeGroup(String id) {
+        try {
+            JSONArray arr = groupsJson();
+            JSONArray out = new JSONArray();
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject g = arr.optJSONObject(i);
+                if (g != null && !id.equals(g.optString("id"))) out.put(g);
+            }
+            write(new File(App.ctx().getFilesDir(), "groups.json"), out.toString());
+            // 组没了，账号落回「未分组」
+            for (Rec r : list()) {
+                if (id.equals(r.groupId)) {
+                    r.groupId = "";
+                    persist(r);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
     public static JSONArray views() {
         JSONArray arr = new JSONArray();
         for (Rec r : list()) arr.put(r.view());
