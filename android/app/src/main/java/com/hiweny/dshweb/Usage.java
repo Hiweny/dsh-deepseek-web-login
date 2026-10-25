@@ -71,8 +71,16 @@ public final class Usage {
         }
     }
 
+    private static JSONObject cachedSummary;
+    private static long cachedAt = 0;
+    private static int cachedDays = -1;
+
     public static JSONObject summary(int days) {
         days = Math.max(1, Math.min(KEEP_DAYS, days));
+        // 面板每 5 秒拉一次状态；别每次都把 30 天的 JSONL 重算一遍（那是主线程之外最贵的一段）
+        if (cachedSummary != null && cachedDays == days && System.currentTimeMillis() - cachedAt < 60000) {
+            return cachedSummary;
+        }
         JSONObject result = new JSONObject();
         long totalCalls = 0, okCalls = 0, totalIn = 0, totalOut = 0, serverCalls = 0;
         JSONArray series = new JSONArray();
@@ -150,6 +158,9 @@ public final class Usage {
             result.put("byAccount", byAccount);
         } catch (Exception ignored) {
         }
+        cachedSummary = result;
+        cachedAt = System.currentTimeMillis();
+        cachedDays = days;
         return result;
     }
 
