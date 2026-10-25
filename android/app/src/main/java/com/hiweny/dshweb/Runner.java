@@ -49,6 +49,8 @@ public final class Runner {
         String sessionId;
         String accountId;
         String lastPrompt = "";
+        int lastPromptLen;
+        String lastPromptHash = "";
         String lastMessageId = "";
         int turns;
         long updatedAt;
@@ -202,12 +204,21 @@ public final class Runner {
                 Slot slot = req.slotKey.isEmpty() ? null : SLOTS.get(req.slotKey);
                 boolean chained = false;
 
+                boolean strictAppend = false;
                 if (slot != null && slot.accountId.equals(acc.id) && Cfg.sessionReuseTurns() > 0
                         && "chained".equals(Cfg.contextMode())
                         && slot.turns < Cfg.sessionReuseTurns()
                         && !slot.lastMessageId.isEmpty()
-                        && parts.full.startsWith(slot.lastPrompt)) {
-                    prompt = parts.full.substring(slot.lastPrompt.length());
+                        && parts.full.length() > slot.lastPromptLen) {
+                    if (!slot.lastPrompt.isEmpty()) {
+                        strictAppend = parts.full.startsWith(slot.lastPrompt);
+                    } else {
+                        // 跨重启：只留了长度 + 前缀 hash
+                        strictAppend = sha1(parts.full.substring(0, slot.lastPromptLen)).equals(slot.lastPromptHash);
+                    }
+                }
+                if (strictAppend && slot != null) {
+                    prompt = parts.full.substring(slot.lastPromptLen);
                     parent = slot.lastMessageId;
                     sessionId = slot.sessionId;
                     chained = true;
@@ -332,9 +343,12 @@ public final class Runner {
                     ns.sessionId = sa.sessionId;
                     ns.accountId = acc.id;
                     ns.lastPrompt = parts.full;
+                    ns.lastPromptLen = parts.full.length();
+                    ns.lastPromptHash = sha1(parts.full);
                     ns.lastMessageId = sa.messageId;
                     ns.turns = chained ? ns.turns + 1 : 1;
                     ns.updatedAt = System.currentTimeMillis();
+                    saveSlots();
                 }
 
                 if (toolEmitted) {
@@ -492,6 +506,82 @@ public final class Runner {
                 sink.onText(tail);
             }
             done = true;
+        }
+    }
+
+    private static final String SLOT_FILE = "slots.json";
+
+    /** 会话槽落盘（上游叫 resume-state.json）：重启后还能接着用原来的网页端会话。 */
+    public static synchronized void saveSlots() {
+        try {
+            JSONArray arr = new JSONArray();
+            synchronized (SLOTS) {
+                for (Map.Entry<String, Slot> e : SLOTS.entrySet()) {
+                    Slot v = e.getValue();
+                    JSONObject o = new JSONObject();
+                    o.put("key", e.getKey());
+                    o.put("sid", v.sessionId);
+                    o.put("acc", v.accountId);
+                    o.put("len", v.lastPromptLen);
+                    o.put("hash", v.lastPromptHash);
+                    o.put("mid", v.lastMessageId);
+                    o.put("turns", v.turns);
+                    o.put("at", v.updatedAt);
+                    arr.put(o);
+                }
+            }
+            java.io.FileOutputStream out = new java.io.FileOutputStream(
+                    new java.io.File(App.ctx().getFilesDir(), SLOT_FILE));
+            out.write(arr.toString().getBytes("UTF-8"));
+            out.close();
+        } catch (Exception ignored) {
+        }
+    }
+
+    public static synchronized void loadSlots() {
+        try {
+            java.io.File f = new java.io.File(App.ctx().getFilesDir(), SLOT_FILE);
+            if (!f.exists()) return;
+            byte[] buf = new byte[(int) f.length()];
+            java.io.FileInputStream in = new java.io.FileInputStream(f);
+            int off = 0;
+            while (off < buf.length) {
+                int n = in.read(buf, off, buf.length - off);
+                if (n < 0) break;
+                off += n;
+            }
+            in.close();
+            JSONArray arr = new JSONArray(new String(buf, 0, off, "UTF-8"));
+            synchronized (SLOTS) {
+                SLOTS.clear();
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject o = arr.optJSONObject(i);
+                    if (o == null) continue;
+                    Slot v = new Slot();
+                    v.sessionId = o.optString("sid");
+                    v.accountId = o.optString("acc");
+                    v.lastPromptLen = o.optInt("len");
+                    v.lastPromptHash = o.optString("hash");
+                    v.lastMessageId = o.optString("mid");
+                    v.turns = o.optInt("turns");
+                    v.updatedAt = o.optLong("at");
+                    if (v.sessionId != null && !v.sessionId.isEmpty()) SLOTS.put(o.optString("key"), v);
+                }
+            }
+            App.Lg.i("已恢复 " + SLOTS.size() + " 个会话槽");
+        } catch (Exception ignored) {
+        }
+    }
+
+    static String sha1(String s) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-1");
+            byte[] d = md.digest(s.getBytes("UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : d) sb.append(String.format("%02x", b));
+            return sb.toString();
+        } catch (Exception e) {
+            return Integer.toHexString(s.hashCode());
         }
     }
 
