@@ -164,6 +164,14 @@
   }
   function deviceId() {
     try {
+      // 页面自己就有设备 ID（localStorage 的 deepseek-device-id:chat），优先用它
+      var own = localStorage.getItem('deepseek-device-id:chat');
+      if (own && own.length >= 8) {
+        try { own = own.replace(/^"|"$/g, ''); } catch (e) {}
+        if (own && own.length >= 8) return own;
+      }
+    } catch (e) {}
+    try {
       var k = 'dsh_device_id';
       var v = localStorage.getItem(k);
       if (!v) {
@@ -581,4 +589,24 @@
   };
   window.__DSH = API;
   log('已就绪 ' + location.href);
+
+  // 登录成功后**自动**上报登录态（用户不用再去点「捕获」）。
+  // 只在 token 从无到有、或换了一个新 token 时上报一次。
+  var lastReported = '';
+  setInterval(function () {
+    try {
+      var t = readUserToken();
+      if (t && t.length > 16 && t !== lastReported) {
+        lastReported = t;
+        DSHBridge.emit('auto', JSON.stringify({
+          t: 'ok',
+          token: t,
+          hifLeim: readHifLeim(),
+          deviceId: deviceId(),
+          userAgent: navigator.userAgent,
+          url: location.href
+        }));
+      }
+    } catch (e) {}
+  }, 2500);
 })();
