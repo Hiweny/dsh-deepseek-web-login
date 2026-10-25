@@ -86,7 +86,7 @@
   .bars{display:flex;align-items:flex-end;gap:5px;height:80px;margin-top:8px}
   .bars div{flex:1;background:linear-gradient(180deg,var(--accent),var(--accent2));border-radius:6px 6px 3px 3px;min-height:3px;opacity:.9}
   .bars .lbl{font-size:9px;color:var(--sub);text-align:center;margin-top:5px}
-  pre.log{background:var(--card2);border-radius:12px;padding:12px;font-size:10.5px;line-height:1.55;
+  pre.log{background:var(--card2);color:var(--text);border-radius:12px;padding:12px;font-size:10.5px;line-height:1.55;
     max-height:46vh;overflow:auto;white-space:pre-wrap;word-break:break-all;color:var(--sub);margin:0;
     font-family:ui-monospace,Menlo,monospace}
   .drawer{position:fixed;inset:0;z-index:60;pointer-events:none}
@@ -114,7 +114,7 @@
   .chip{display:inline-block;font-size:11px;padding:5px 10px;border-radius:999px;background:var(--card2);color:var(--sub);margin:0 6px 6px 0}
 </style>
 </head>
-<body>
+<body style="background:var(--bg);min-height:100vh">
 <div class="drawer" id="drawer">
   <div class="mask" onclick="closeDrawer()"></div>
   <div class="panel">
@@ -128,6 +128,7 @@
     <button class="nav" data-page="risk"><span class="ic">⛨</span>防风控</button>
     <button class="nav" data-page="context"><span class="ic">⇄</span>上下文</button>
     <button class="nav" data-page="look"><span class="ic">◐</span>外观</button>
+    <button class="nav" data-page="diag"><span class="ic">✚</span>诊断</button>
     <button class="nav" data-page="logs"><span class="ic">≡</span>日志</button>
     <button class="nav" data-page="about"><span class="ic">ⓘ</span>关于</button>
     <div class="foot" id="foot">—</div>
@@ -202,6 +203,10 @@
     </div>
     <div class="card">
       <h2>账号库 <span id="accCount" style="float:right;color:var(--sub);font-weight:500"></span></h2>
+      <div class="row" style="margin-bottom:10px">
+        <button class="btn ghost" onclick="newGroup()">新建分组</button>
+        <button class="btn ghost" onclick="runDiag()">链路自检</button>
+      </div>
       <div id="accList"><div class="hint">还没有账号，先在网页版登录并捕获。</div></div>
     </div>
     <div class="card">
@@ -334,6 +339,23 @@
     </div>
   </section>
 
+  <!-- 诊断 -->
+  <section class="page" id="p-diag">
+    <div class="card">
+      <h2>链路自检</h2>
+      <div class="hint">四项检查全部零额度：页面脚本 → 鉴权 → PoW 求解 → 建会话。任何一项失败，下面会写具体原因。</div>
+      <button class="btn" style="margin-top:12px" onclick="runDiag()">开始自检</button>
+      <pre class="log" id="diagBox" style="margin-top:12px;max-height:44vh">点上面的按钮开始…</pre>
+    </div>
+    <div class="card">
+      <h2>当前状态</h2>
+      <div class="item"><div class="lbl">引擎</div><span id="dEngine2" class="mono">—</span></div>
+      <div class="item"><div class="lbl">账号</div><span id="dAcc2" class="mono">—</span></div>
+      <div class="item"><div class="lbl">接口</div><span id="dApi2" class="mono">—</span></div>
+      <div class="item"><div class="lbl">WebView UA</div><div class="desc" id="dUa" style="text-align:right;word-break:break-all">—</div></div>
+    </div>
+  </section>
+
   <!-- 日志 -->
   <section class="page" id="p-logs">
     <div class="card">
@@ -342,7 +364,7 @@
         <button class="btn ghost" onclick="loadLogs()">刷新</button>
         <button class="btn ghost" onclick="Android.clearLogs();loadLogs()">清空</button>
       </div>
-      <pre class="log" id="logBox">加载中…</pre>
+      <pre class="log" id="logBox" style="min-height:200px">点「刷新」加载日志…</pre>
     </div>
   </section>
 
@@ -373,6 +395,32 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
 let S = {};      // 最新 state
 let CFG = {};    // 配置快照
 let page = 'home';
+let refreshing = false;
+let lastRefresh = 0;
+
+/** 原生推过来的事件（capture / probe / diag / toast / refresh） */
+window.__ev = function (name, json) {
+  let d = {};
+  try { d = JSON.parse(json || '{}'); } catch (e) {}
+  if (name === 'toast') { toast(d.msg || ''); return; }
+  if (name === 'refresh') { setTimeout(refresh, 120); return; }
+  if (name === 'capture') {
+    toast(d.msg || '已捕获');
+    refresh();
+    return;
+  }
+  if (name === 'probe') {
+    if (d.done) { toast('校验完成：正常 ' + (d.ok|0) + ' / 异常 ' + (d.fail|0)); refresh(); }
+    else toast('校验中 ' + (d.at|0) + '/' + (d.total|0) + ' · 正常 ' + (d.ok|0));
+    return;
+  }
+  if (name === 'diag') {
+    const b = document.getElementById('diagBox');
+    if (b) b.textContent = d.text || '';
+    toast('自检完成');
+    return;
+  }
+};
 
 function toast(m){ const t=$('#toast'); t.textContent=m; t.classList.add('on'); clearTimeout(window.__tt); window.__tt=setTimeout(()=>t.classList.remove('on'),1800); }
 function openDrawer(){ $('#drawer').classList.add('on'); }
@@ -448,14 +496,22 @@ function render(){
     const state = bad ? '<span class="tag bad">需重新登录</span>' : (a.unverified? '<span class="tag wait">未校验</span>' : '<span class="tag">正常</span>');
     return '<div class="acc"><div class="avatar">'+((a.label||a.userDisplay||'D').slice(0,1).toUpperCase())+'</div>'
       + '<div style="flex:1;min-width:0"><div class="n">'+(a.label||a.userDisplay||'未命名')+' '+(a.active?'<span class="tag">当前</span>':'')+' '+state+'</div>'
-      + '<div class="m">token '+a.tokenLen+' 字符 · '+a.cookieSummary+'</div>'
+      + '<div class="m">token '+a.tokenLen+' 字符 · '+a.cookieSummary+(a.groupId?(' · 分组 '+groupName(a.groupId)):'')+'</div>'
       + (a.lastVerifyError? '<div class="m" style="color:var(--bad)">'+a.lastVerifyError.slice(0,60)+'</div>':'')
       + '<div style="margin-top:8px;display:flex;gap:8px">'
       + (a.active?'':'<button class="btn small ghost" onclick="setActive(\''+a.id+'\')">切换</button>')
       + '<button class="btn small ghost" onclick="renameAcc(\''+a.id+'\')">备注</button>'
+      + '<button class="btn small ghost" onclick="setGroup(\''+a.id+'\')">分组</button>'
       + '<button class="btn small danger" onclick="delAcc(\''+a.id+'\')">移除</button>'
       + '</div></div></div>';
   }).join('') : '<div class="hint">还没有账号，先在网页版登录并捕获。</div>';
+
+  // 诊断页状态
+  const $d2=(id,v)=>{ const e=document.getElementById(id); if(e) e.textContent=v; };
+  $d2('dEngine2', S.engine||'—');
+  $d2('dAcc2', act ? ((act.label||act.userDisplay||'未命名')+' · token '+act.tokenLen) : '未登录');
+  $d2('dApi2', shortAddr());
+  $d2('dUa', S.ua||'—');
 
   // 配置控件
   if (CFG.port) {
@@ -533,8 +589,27 @@ function pasteToken(){
   const t = prompt('粘贴网页版 token（chat.deepseek.com 的 localStorage.userToken）');
   if(t && t.trim().length>8){ Android.importToken(t.trim()); toast('已导入，正在校验…'); setTimeout(refresh,1200); }
 }
-function captureNow(){ const r=JSON.parse(Android.captureNow()||'{}'); toast(r.msg||'已尝试捕获'); refresh(); }
-function probeAll(){ toast('正在校验…'); const r=JSON.parse(Android.probeAll()||'{}'); toast('校验完成：正常 '+r.ok+' / 异常 '+r.fail); refresh(); }
+function captureNow(){ Android.captureNow(); toast('正在从页面读取登录态…'); }
+function probeAll(){ Android.probeAll(); toast('正在校验全部账号…'); }
+function runDiag(){
+  const b=document.getElementById('diagBox'); if(b) b.textContent='自检中…（最多 60 秒）';
+  Android.diagnose();
+}
+function groupName(id){
+  const g=(S.groups||[]).find(x=>x.id===id); return g? g.name : '未分组';
+}
+function setGroup(id){
+  const gs=S.groups||[];
+  const opts=gs.map((g,i)=>(i+1)+'. '+g.name).join('\n');
+  const v=prompt('输入分组编号（0 = 未分组）\n'+opts);
+  if(v===null) return;
+  const n=parseInt(v,10);
+  let gid='';
+  if(n>0 && gs[n-1]) gid=gs[n-1].id;
+  Android.setGroup(id,gid); setTimeout(refresh,300);
+}
+function newGroup(){ const n=prompt('分组名称'); if(n){ Android.addGroup(n); setTimeout(refresh,300); } }
+function delGroup(id){ if(confirm('删除这个分组？（账号会落回「未分组」）')){ Android.removeGroup(id); setTimeout(refresh,300);} }
 function setActive(id){ Android.setActive(id); toast('已切换'); setTimeout(refresh,300); }
 function renameAcc(id){ const v=prompt('备注名'); if(v!==null){ Android.rename(id,v); refresh(); } }
 function delAcc(id){ if(confirm('移除这个账号？（本地凭证会被删除）')){ Android.remove(id); refresh(); } }
@@ -544,18 +619,21 @@ function copyText(s){ const ta=document.createElement('textarea'); ta.value=s; d
 function loadLogs(){ $('#logBox').textContent = Android.logs()||'(空)'; }
 
 async function refresh(){
+  if (refreshing) return;
+  refreshing = true;
   try{
     S = JSON.parse(Android.state()||'{}');
     CFG = JSON.parse(Android.cfg()||'{}');
-    S.recent = JSON.parse(Android.recentCalls()||'[]');
+    S.recent = S.recent || [];
     applyTheme(CFG.theme||'auto');
     render();
   }catch(e){ console.error(e); }
+  finally{ refreshing=false; lastRefresh=Date.now(); }
 }
 window.__refresh = refresh;
 
 if (window.matchMedia) window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', ()=>applyTheme((CFG.theme)||'auto'));
-refresh(); setInterval(refresh, 2500);
+refresh(); setInterval(()=>{ if(Date.now()-lastRefresh>4500) refresh(); }, 5000);
 </script>
 </body>
 </html>
