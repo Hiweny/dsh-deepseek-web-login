@@ -103,13 +103,23 @@ public final class Protocol {
     }
 
     // ── 序列化结果 ───────────────────────────────────────────
+    public static final class Image {
+        public String dataUrl;
+        public String name;
+
+        public Image(String dataUrl, String name) {
+            this.dataUrl = dataUrl;
+            this.name = name;
+        }
+    }
+
     public static final class Parts {
         public String full = "";
         public String head = "";
         public String transcript = "";
         public int promptChars;
-        // 图片占位（本轮实际要发的 ref_file_ids 由调用方另算）
-        public final List<String> imageKeys = new ArrayList<>();
+        /** 请求里带的图片（data: URL），由调用方上传成 ref_file_ids。 */
+        public final List<Image> images = new ArrayList<>();
     }
 
     /**
@@ -176,8 +186,10 @@ public final class Protocol {
             }
             // user
             String t = flat(m.opt("content"));
-            if (t.trim().isEmpty() && countImages(m.opt("content")) == 0) continue;
+            int imgs = countImages(m.opt("content"));
+            if (t.trim().isEmpty() && imgs == 0) continue;
             body.append("User: ").append(t).append("\n\n");
+            if (imgs > 0) collectImages(m.opt("content"), p.images);
         }
 
         String transcript = body.toString();
@@ -234,6 +246,37 @@ public final class Protocol {
             return o.optString("text", o.optString("content", ""));
         }
         return String.valueOf(content);
+    }
+
+    /** 收集 data: URL 形式的图片（http(s) 链接也要，但 APK 侧只处理 base64）。 */
+    static void collectImages(Object content, List<Image> out) {
+        if (!(content instanceof JSONArray)) return;
+        JSONArray a = (JSONArray) content;
+        for (int i = 0; i < a.length(); i++) {
+            Object b = a.opt(i);
+            if (!(b instanceof JSONObject)) continue;
+            JSONObject o = (JSONObject) b;
+            String type = o.optString("type");
+            String url = null;
+            if ("image_url".equals(type)) {
+                Object u = o.opt("image_url");
+                if (u instanceof JSONObject) url = ((JSONObject) u).optString("url");
+                else if (u instanceof String) url = (String) u;
+            } else if ("image".equals(type)) {
+                url = o.optString("url", o.optString("data"));
+            }
+            if (url == null || !url.startsWith("data:")) continue;
+            if (out.size() >= 60) break;
+            String ext = "png";
+            int semi = url.indexOf(';');
+            if (semi > 5) {
+                String mime = url.substring(5, semi);
+                if (mime.contains("jpeg") || mime.contains("jpg")) ext = "jpg";
+                else if (mime.contains("webp")) ext = "webp";
+                else if (mime.contains("gif")) ext = "gif";
+            }
+            out.add(new Image(url, "image-" + (out.size() + 1) + "." + ext));
+        }
     }
 
     static int countImages(Object content) {
