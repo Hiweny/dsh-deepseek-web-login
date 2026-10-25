@@ -405,8 +405,16 @@ public final class Engine {
 
     /** JS → Java 的唯一入口：**只做分发**，任何业务逻辑都丢给 DISPATCH。 */
     public static void onEvent(String reqId, String json) {
-        JSONObject ev = Json.obj(json);
+        final JSONObject ev = Json.obj(json);
         if (ev == null) return;
+        // 页面登录成功后主动上报（不走请求-响应配对）
+        if ("auto".equals(reqId)) {
+            final String token = ev.optString("token");
+            if (token != null && token.length() > 16) {
+                DISPATCH.execute(() -> autoCapture(token, ev));
+            }
+            return;
+        }
         String t = ev.optString("t");
         final Cb cb = ONESHOT.get(reqId);
         if (cb != null) {
@@ -434,6 +442,46 @@ public final class Engine {
                     App.Lg.e("stream cb: " + e);
                 }
             });
+        }
+    }
+
+    /** 页面自动上报的登录态 → 入库 + 只读探活。 */
+    private static void autoCapture(String token, JSONObject ev) {
+        try {
+            Auth.Rec existing = Auth.active();
+            if (existing != null && token.equals(existing.token)) return;
+            for (Auth.Rec r : Auth.list()) {
+                if (token.equals(r.token)) {
+                    Auth.setActive(r.id);
+                    App.Lg.i("自动识别到已登录账号: " + r.id);
+                    return;
+                }
+            }
+            Auth.Rec r = new Auth.Rec();
+            r.token = token;
+            r.hifLeim = ev.optString("hifLeim", "");
+            r.deviceId = ev.optString("deviceId", "");
+            r.userAgent = ev.optString("userAgent", userAgent);
+            r.cookie = com.hiweny.dshweb.Net.cookie();
+            r.capturedAt = System.currentTimeMillis();
+            Auth.upsert(r, "");
+            Auth.Rec acc = Auth.active();
+            App.Lg.i("已自动捕获登录态（token 长度 " + token.length() + "）");
+            if (acc != null) {
+                JSONObject a = new JSONObject();
+                a.put("token", acc.token);
+                a.put("deviceId", acc.deviceId == null ? "" : acc.deviceId);
+                a.put("omitCookie", true);
+                JSONObject u = Engine.call("usersCurrent", a, 20000);
+                if (u.optInt("status", 0) == 200) {
+                    Auth.markVerified(acc);
+                    App.Lg.i("自动捕获的账号探活通过");
+                } else {
+                    Auth.markVerifyError(acc, "HTTP " + u.optInt("status", 0));
+                }
+            }
+        } catch (Throwable e) {
+            App.Lg.e("autoCapture: " + e);
         }
     }
 
